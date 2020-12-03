@@ -22,4 +22,6 @@ then
     pip3 install torch-cluster==latest+${CUDA} -f https://pytorch-geometric.com/whl/torch-1.7.0.html
     pip3 install torch-spline-conv==latest+${CUDA} -f https://pytorch-geometric.com/whl/torch-1.7.0.html
     pip3 install torch-geometric
+    pip3 install torch-geometric-temporal
+    pip3 install geopy
 fi
