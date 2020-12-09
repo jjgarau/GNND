@@ -67,6 +67,7 @@ def gnn_predictor():
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
     loss_func = mape_loss
+    loss_funcs = [mape_loss, mse_loss]
 
 
     layers = [SAGEConv, LEConv, TAGConv]
@@ -79,7 +80,8 @@ def gnn_predictor():
     for layer in layers:
         models.append(graph_nets.GraphNet(layer, lookback, output_size))
 
-    for model in models: #Grid search loop
+    model = graph_nets.GraphNet(SAGEConv, lookback, output_size)
+    for loss_func in loss_funcs: #Grid search loop
 
         print(model)
         batch_size = 16
@@ -108,7 +110,7 @@ def gnn_predictor():
                                                                                                                 val_acc,
                                                                                                                   test_acc))
         x = np.arange(0, num_epochs)
-        plt.title("Chickenpox")
+        plt.title("Chickenpox MSE vs. MAPE Loss")
         plt.xlabel('Epoch')
         plt.ylabel('Loss')
         lbl = "?"
@@ -116,7 +118,7 @@ def gnn_predictor():
             lbl = str(model.conv1)
         elif type(model) is graph_nets.RecurrentGraphNet:
             lbl = str(model.recurrent)
-        plt.plot(x, val_losses, label=lbl.split('(')[0])
+        plt.plot(x, val_losses, label=str(loss_func))
     plt.legend()
     plt.show()
 
@@ -126,3 +128,9 @@ if __name__ == "__main__":
     df = loader.get_dataset()
 
     gnn_predictor()
+
+
+#try squared error for chickenpox (reporting and optimization loss function can be different)
+#It's a 3D problem (T (lookforward), lookback, and dataset)
+#RESNet y = act(f(X) + b) -> y = X + act(f(X) + b)
+#Look around for how to change shape on resid when dim doesn't match

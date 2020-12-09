@@ -17,8 +17,19 @@ def all_optimizers():
     return optimizers
 
 def mape_loss(output, label):
-    loss = torch.mean(torch.abs(torch.div((output - label), label)))
-    return loss
+    return torch.mean(torch.abs(torch.div((output - label), label)))
+
+def mse_loss(output, label):
+    return torch.mean(torch.square(output - label))
+
+def rmse_loss(output, label):
+    return torch.sqrt(torch.mean(torch.square(output - label)))
+
+def mae_loss(output, label):
+    return torch.mean(torch.abs(output - label))
+
+def mase_loss(output, label):
+    return torch.mean(torch.abs(output - label)) / torch.mean(label)
 
 def train_gnn(model, loader, optimizer, loss_func, device):
     model.train()
@@ -48,4 +59,4 @@ def evaluate_gnn(model, loader, device):
             labels.append(label)
     predictions = np.vstack(predictions)
     labels = np.vstack(labels)
-    return np.mean(abs((labels - predictions) / labels))
+    return np.mean(np.abs(predictions - labels)) / np.mean(labels) #np.mean(abs((labels - predictions) / labels))  #reporting loss function, different from training

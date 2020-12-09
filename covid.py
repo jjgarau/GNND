@@ -6,7 +6,8 @@ from tqdm import tqdm
 import random
 from common import *
 import graph_nets
-from torch_geometric.nn import SAGEConv
+from torch_geometric.nn import SAGEConv, LEConv
+import matplotlib.pyplot as plt
 
 lookback = 5
 
@@ -28,24 +29,36 @@ class COVIDDataset(InMemoryDataset):
 
     def process(self):
         data_list = []
-        combs = list(itertools.combinations(range(len(nations)), 2))
-        combs = random.choices(combs, k=len(nations)*3)
-        source_nodes = [e[0] for e in combs]
-        target_nodes = [e[1] for e in combs]
+        n = len(nations)
+        source_nodes = []
+        target_nodes = []
+        for i in range(n):
+            for _ in range(3):
+                i2 = random.randint(0, n - 1)
+                source_nodes.append(i)
+                target_nodes.append(i2)
+                source_nodes.append(i2)
+                target_nodes.append(i)
+
         torch_def = torch.cuda if torch.cuda.is_available() else torch
         for i in tqdm(range(len(df) - lookback)):
-            # Node Features
+            # Node Features [215, 5]
             values_x = df.iloc[i:(i + lookback), 1:].to_numpy().T
             x = torch_def.FloatTensor(values_x)
 
-            # Labels
+            # Labels [215, 1]
             values_y = df.iloc[(i + lookback):(i + lookback + 1), 1:].to_numpy().T
             y = torch_def.FloatTensor(values_y)
 
-            # Edge Features
+            # Edge Features [2, 648]
             edge_index = torch_def.LongTensor([source_nodes.copy(), target_nodes.copy()])
+            edge_attrs = []
+            for i in range(len(source_nodes)):
+                edge_attrs.append([1.0])
+            edge_attr = torch_def.FloatTensor(edge_attrs)
 
-            data = Data(x=x, edge_index=edge_index, y=y)
+
+            data = Data(x=x, edge_index=edge_index, y=y, edge_attr=edge_attr)
             data_list.append(data)
         data, slices = self.collate(data_list)
         torch.save((data, slices), self.processed_paths[0])
@@ -64,21 +77,20 @@ def gnn_predictor():
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-    loss_func = mape_loss
-    dim = 64
-    models = [graph_nets.GraphNet(SAGEConv, lookback, len(nations))]
+    loss_func = mase_loss
+    models = [graph_nets.GraphNet(SAGEConv, lookback, len(nations), dim=128)]
 
     for model in models: #Grid search loop
 
         print(model)
         optimizer = torch.optim.Adam(model.parameters(), lr=0.005)
 
-        batch_size = 256
+        batch_size = 4
         train_loader = DataLoader(train_dataset, batch_size=batch_size)
         val_loader = DataLoader(val_dataset, batch_size=batch_size)
         test_loader = DataLoader(test_dataset, batch_size=batch_size)
 
-        num_epochs = 20
+        num_epochs = 100
         val_losses = []
         for epoch in range(num_epochs):
             loss = train_gnn(model, train_loader, optimizer, loss_func, device)
@@ -87,14 +99,15 @@ def gnn_predictor():
             val_acc = evaluate_gnn(model, val_loader, device)
             test_acc = evaluate_gnn(model, test_loader, device)
             val_losses.append(val_acc)
-            print('Epoch: {:03d}, Loss: {:.5f}, Train MAPE: {:.5f}, Val MAPE: {:.5f}, Test MAPE: {:.5f}'.format(epoch, loss,
+            print('Epoch: {:03d}, Loss: {:.5f}, Train Loss: {:.5f}, Val Loss: {:.5f}, Test Loss: {:.5f}'.format(epoch, loss,
                                                                                                                 train_acc,
                                                                                                                 val_acc,
                                                                                                                   test_acc))
         x = np.arange(0, num_epochs)
+        plt.title('Testing generalized depth GNN class')
         plt.xlabel('Epoch')
-        plt.ylabel('Loss')
-        plt.plot(x, val_losses, label=str(model).split('(')[0])
+        plt.ylabel('MASE Loss')
+        plt.plot(x, val_losses, label="Depth: " + str(model.num_layers))
     plt.legend()
     plt.show()
 if __name__ == '__main__':
@@ -105,8 +118,9 @@ if __name__ == '__main__':
 
     nations = df.location.unique()
     # dates = df.date.unique()
-    # new_data = dict()
-    # for nation in nations:
+    # new_data = {'Time': range(len(dates))}
+    # for i in range(len(nations)):
+    #     nation = nations[i]
     #     nation_data = df.loc[df.location == nation]
     #     new_cases = []
     #     last_value = 0.0
@@ -119,9 +133,9 @@ if __name__ == '__main__':
     #             new_cases.append(last_value)
     #     new_data[nation + '_new_cases'] = new_cases
     # df = pd.DataFrame(data=new_data)
-
-    # print('Dataset preprocessed')
     #
+    # print('Dataset preprocessed')
+    # df.to_csv("df.csv")
     # print(df.head())
     # print(df.columns)
     # print(df.shape)

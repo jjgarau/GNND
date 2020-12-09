@@ -38,7 +38,55 @@ pop_centroids_2000 = {'AT': (47.765386201318, 14.645625300333),
                       } #Based on populations from year 2000 from http://cs.ecs.baylor.edu/~hamerly/software/europe_population_weighted_centers.txt
 lookback = 5
 
+class DemandDatasetGeodesic(InMemoryDataset):
+    #Edge features are geodesic distance between population centroids
+    def __init__(self, root, transform=None, pre_transform=None):
+        super(DemandDatasetGeodesic, self).__init__(root, transform, pre_transform)
+        self.data, self.slices = torch.load(self.processed_paths[0])
+
+    @property
+    def raw_file_names(self):
+        return ['time_series_15min_singleindex_filtered.csv']
+
+    @property
+    def processed_file_names(self):
+        return ['demand_dataset_geodesic.dataset']
+
+    def download(self):
+        pass
+
+    def process(self):
+        data_list = []
+        combs = list(itertools.combinations(range(len(country_codes)), 2))
+        source_nodes = [e[0] for e in combs]
+        target_nodes = [e[1] for e in combs]
+        torch_def = torch.cuda if torch.cuda.is_available() else torch
+        print(len(df))
+        for i in tqdm(range(len(df) - lookback)):
+            #Node Features
+            values_x = df.iloc[i:(i+lookback), 1:].to_numpy().T
+            x = torch_def.FloatTensor(values_x)
+            # print(x.shape) [6, 5]
+
+            #Labels
+            values_y = df.iloc[(i+lookback):(i+lookback+1), 1:].to_numpy().T
+            y = torch_def.FloatTensor(values_y)
+            # print(y.shape) [6, 1]
+
+            #Edge Features
+            edge_index = torch_def.LongTensor([source_nodes.copy(), target_nodes.copy()])
+            # print(edge_index.shape) [2, 15]
+            edge_attr = torch_def.FloatTensor([[geodesic(pop_centroids_2000[country_codes[comb[0]]], pop_centroids_2000[country_codes[comb[1]]]).km] for comb in combs])
+            edge_attr = torch.nn.functional.normalize(edge_attr, dim=0)
+            # print(edge_attr.shape) [15, 1]
+
+            data = Data(x=x, edge_index=edge_index, y=y, edge_attr=edge_attr)
+            data_list.append(data)
+        data, slices = self.collate(data_list)
+        torch.save((data, slices), self.processed_paths[0])
+
 class DemandDataset(InMemoryDataset):
+    #Edge features are difference in longitude between population centroids
     def __init__(self, root, transform=None, pre_transform=None):
         super(DemandDataset, self).__init__(root, transform, pre_transform)
         self.data, self.slices = torch.load(self.processed_paths[0])
@@ -75,7 +123,65 @@ class DemandDataset(InMemoryDataset):
             #Edge Features
             edge_index = torch_def.LongTensor([source_nodes.copy(), target_nodes.copy()])
             # print(edge_index.shape) [2, 15]
-            edge_attr = torch_def.FloatTensor([[geodesic(pop_centroids_2000[country_codes[comb[0]]], pop_centroids_2000[country_codes[comb[1]]]).km] for comb in combs])
+            edge_attrs = []
+            for comb in combs:
+                coords = [pop_centroids_2000[country_codes[country]] for country in comb]
+                comb_attr = [coords[0][1] - coords[1][1]]
+                edge_attrs.append(comb_attr)
+            edge_attr = torch_def.FloatTensor(edge_attrs)
+            edge_attr = torch.nn.functional.normalize(edge_attr, dim=0)
+            # print(edge_attr.shape) [15, 1]
+
+            data = Data(x=x, edge_index=edge_index, y=y, edge_attr=edge_attr)
+            data_list.append(data)
+        data, slices = self.collate(data_list)
+        torch.save((data, slices), self.processed_paths[0])
+
+class DemandDatasetDirectional(InMemoryDataset):
+    #Edges are directional, so there are 2 per combination
+    #Edge features are difference in longitude between population centroids
+    def __init__(self, root, transform=None, pre_transform=None):
+        super(DemandDatasetDirectional, self).__init__(root, transform, pre_transform)
+        self.data, self.slices = torch.load(self.processed_paths[0])
+
+    @property
+    def raw_file_names(self):
+        return ['time_series_15min_singleindex_filtered.csv']
+
+    @property
+    def processed_file_names(self):
+        return ['demand_dataset_directional.dataset']
+
+    def download(self):
+        pass
+
+    def process(self):
+        data_list = []
+        combs = list(itertools.permutations(range(len(country_codes)), 2))
+        source_nodes = [e[0] for e in combs]
+        target_nodes = [e[1] for e in combs]
+        torch_def = torch.cuda if torch.cuda.is_available() else torch
+        print(len(df))
+        for i in tqdm(range(len(df) - lookback)):
+            #Node Features
+            values_x = df.iloc[i:(i+lookback), 1:].to_numpy().T
+            x = torch_def.FloatTensor(values_x)
+            # print(x.shape) [6, 5]
+
+            #Labels
+            values_y = df.iloc[(i+lookback):(i+lookback+1), 1:].to_numpy().T
+            y = torch_def.FloatTensor(values_y)
+            # print(y.shape) [6, 1]
+
+            #Edge Features
+            edge_index = torch_def.LongTensor([source_nodes.copy(), target_nodes.copy()])
+            # print(edge_index.shape) [2, 15]
+            edge_attrs = []
+            for comb in combs:
+                coords = [pop_centroids_2000[country_codes[country]] for country in comb]
+                comb_attr = [coords[0][1] - coords[1][1]]
+                edge_attrs.append(comb_attr)
+            edge_attr = torch_def.FloatTensor(edge_attrs)
             edge_attr = torch.nn.functional.normalize(edge_attr, dim=0)
             # print(edge_attr.shape) [15, 1]
 
@@ -130,15 +236,8 @@ class DemandDatasetNEF(InMemoryDataset):
 
 
 def gnn_predictor():
-    dataset = DemandDataset(root='data/demand-data/')
-    dataset = dataset.shuffle()
+    dataset = DemandDatasetNEF(root='data/demand-data/')
 
-    sample = len(dataset)
-    # Make dataset smaller for quick testing
-    sample *= 1.0
-    train_dataset = dataset[:int(0.8 * sample)]
-    val_dataset = dataset[int(0.8 * sample):int(0.9 * sample)]
-    test_dataset = dataset[int(0.9 * sample):int(sample)]
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
@@ -154,7 +253,17 @@ def gnn_predictor():
     for layer in layers:
         models.append(graph_nets.GraphNet(layer, lookback, output_size))
 
-    for model in models: #Grid search loop
+    models = [graph_nets.GraphNet(SAGEConv, lookback, output_size)]
+    for i in range(len(models)): #Grid search loop
+        model = models[i]
+        dataset = dataset.shuffle()
+
+        sample = len(dataset)
+        # Make dataset smaller for quick testing
+        sample *= 1.0
+        train_dataset = dataset[:int(0.8 * sample)]
+        val_dataset = dataset[int(0.8 * sample):int(0.9 * sample)]
+        test_dataset = dataset[int(0.9 * sample):int(sample)]
 
         print(model)
 
@@ -178,19 +287,16 @@ def gnn_predictor():
             val_acc = evaluate_gnn(model, val_loader, device)
             test_acc = evaluate_gnn(model, test_loader, device)
             val_losses.append(val_acc)
-            print('Epoch: {:03d}, Loss: {:.5f}, Train MAPE: {:.5f}, Val MAPE: {:.5f}, Test MAPE: {:.5f}'.format(epoch, loss,
+            print('Epoch: {:03d}, Loss: {:.5f}, Train Loss: {:.5f}, Val Loss: {:.5f}, Test Loss: {:.5f}'.format(epoch, loss,
                                                                                                                 train_acc,
                                                                                                                 val_acc,
                                                                                                                   test_acc))
         x = np.arange(0, num_epochs)
+        plt.title("Adding Residual to LEPooling")
         plt.xlabel('Epoch')
         plt.ylabel('Loss')
-        lbl = "?"
-        if type(model) is graph_nets.GraphNet:
-            lbl = str(model.conv1)
-        elif type(model) is graph_nets.RecurrentGraphNet:
-            lbl = str(model.recurrent)
-        plt.plot(x, val_losses, label=lbl.split('(')[0])
+        labels = ["LEPooling", "LEPooling w/ Residual"]
+        plt.plot(x, val_losses, label=labels[i])
     plt.legend()
     plt.show()
 
