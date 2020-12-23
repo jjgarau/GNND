@@ -1,25 +1,14 @@
 import torch
 from torch_geometric.data import InMemoryDataset, Data, DataLoader
-from torch_geometric.nn import MessagePassing, TopKPooling
-from torch_geometric.nn import SAGEConv, GCNConv, GENConv, GatedGraphConv, GraphConv, HypergraphConv, LEConv, SGConv, TAGConv
-import torch_geometric.nn
-from torch_geometric.utils import remove_self_loops, add_self_loops
-from torch_geometric.nn import max_pool_x as map, avg_pool_x as avp
-from torch_geometric.nn import global_mean_pool as gap, global_max_pool as gmp
+from torch_geometric.nn import SAGEConv
 import torch.nn.functional as F
-from sklearn.metrics import mean_absolute_error
 import pandas as pd
 import numpy as np
 from tqdm import tqdm
 import itertools
-import random
 import matplotlib.pyplot as plt
-# import xgboost as xgb
-import torch_geometric_temporal.nn
-from torch_geometric_temporal.data.dataset import ChickenpoxDatasetLoader
-from torch_geometric_temporal.data import discrete_train_test_split
-from torch_geometric_temporal import GConvGRU, GConvLSTM, GCLSTM, DCRNN
-from common import *
+from torch_geometric_temporal import GConvGRU, GConvLSTM, DCRNN
+from util import *
 import graph_nets
 from geopy.distance import geodesic
 
@@ -66,19 +55,16 @@ class DemandDatasetGeodesic(InMemoryDataset):
             #Node Features
             values_x = df.iloc[i:(i+lookback), 1:].to_numpy().T
             x = torch_def.FloatTensor(values_x)
-            # print(x.shape) [6, 5]
 
             #Labels
             values_y = df.iloc[(i+lookback):(i+lookback+1), 1:].to_numpy().T
             y = torch_def.FloatTensor(values_y)
-            # print(y.shape) [6, 1]
 
-            #Edge Features
+            #Edge Index
             edge_index = torch_def.LongTensor([source_nodes.copy(), target_nodes.copy()])
-            # print(edge_index.shape) [2, 15]
+            #Edge Weights
             edge_attr = torch_def.FloatTensor([[geodesic(pop_centroids_2000[country_codes[comb[0]]], pop_centroids_2000[country_codes[comb[1]]]).km] for comb in combs])
             edge_attr = torch.nn.functional.normalize(edge_attr, dim=0)
-            # print(edge_attr.shape) [15, 1]
 
             data = Data(x=x, edge_index=edge_index, y=y, edge_attr=edge_attr)
             data_list.append(data)
@@ -113,24 +99,25 @@ class DemandDataset(InMemoryDataset):
             #Node Features
             values_x = df.iloc[i:(i+lookback), 1:].to_numpy().T
             x = torch_def.FloatTensor(values_x)
-            # print(x.shape) [6, 5]
 
             #Labels
             values_y = df.iloc[(i+lookback):(i+lookback+1), 1:].to_numpy().T
             y = torch_def.FloatTensor(values_y)
-            # print(y.shape) [6, 1]
 
             #Edge Features
             edge_index = torch_def.LongTensor([source_nodes.copy(), target_nodes.copy()])
-            # print(edge_index.shape) [2, 15]
             edge_attrs = []
+
+            #Edge Weights
+            #Calculate distances between countries
             for comb in combs:
                 coords = [pop_centroids_2000[country_codes[country]] for country in comb]
                 comb_attr = [coords[0][1] - coords[1][1]]
                 edge_attrs.append(comb_attr)
+
             edge_attr = torch_def.FloatTensor(edge_attrs)
             edge_attr = torch.nn.functional.normalize(edge_attr, dim=0)
-            # print(edge_attr.shape) [15, 1]
+
 
             data = Data(x=x, edge_index=edge_index, y=y, edge_attr=edge_attr)
             data_list.append(data)
@@ -166,24 +153,24 @@ class DemandDatasetDirectional(InMemoryDataset):
             #Node Features
             values_x = df.iloc[i:(i+lookback), 1:].to_numpy().T
             x = torch_def.FloatTensor(values_x)
-            # print(x.shape) [6, 5]
 
             #Labels
             values_y = df.iloc[(i+lookback):(i+lookback+1), 1:].to_numpy().T
             y = torch_def.FloatTensor(values_y)
-            # print(y.shape) [6, 1]
 
-            #Edge Features
+            #Edge Index
             edge_index = torch_def.LongTensor([source_nodes.copy(), target_nodes.copy()])
-            # print(edge_index.shape) [2, 15]
             edge_attrs = []
+
+            # Edge Weights
+            # Calculate distances between countries
             for comb in combs:
                 coords = [pop_centroids_2000[country_codes[country]] for country in comb]
                 comb_attr = [coords[0][1] - coords[1][1]]
                 edge_attrs.append(comb_attr)
             edge_attr = torch_def.FloatTensor(edge_attrs)
             edge_attr = torch.nn.functional.normalize(edge_attr, dim=0)
-            # print(edge_attr.shape) [15, 1]
+
 
             data = Data(x=x, edge_index=edge_index, y=y, edge_attr=edge_attr)
             data_list.append(data)
@@ -218,16 +205,13 @@ class DemandDatasetNEF(InMemoryDataset):
             #Node Features
             values_x = df.iloc[i:(i+lookback), 1:].to_numpy().T
             x = torch_def.FloatTensor(values_x)
-            # print(x.shape) [6, 5]
 
             #Labels
             values_y = df.iloc[(i+lookback):(i+lookback+1), 1:].to_numpy().T
             y = torch_def.FloatTensor(values_y)
-            # print(y.shape) [6, 1]
 
-            #Edge Features
+            #Edge Index
             edge_index = torch_def.LongTensor([source_nodes.copy(), target_nodes.copy()])
-            # print(edge_index.shape) [2, 15]
 
             data = Data(x=x, edge_index=edge_index, y=y)
             data_list.append(data)
@@ -236,6 +220,7 @@ class DemandDatasetNEF(InMemoryDataset):
 
 
 def gnn_predictor():
+    #Load dataset
     dataset = DemandDatasetNEF(root='data/demand-data/')
 
 
@@ -243,6 +228,9 @@ def gnn_predictor():
 
     loss_func = mape_loss
 
+
+
+    #Design models to be tested
     layers = [SAGEConv]
     recurrent_layers = [GConvLSTM, DCRNN, GConvGRU]
 
@@ -254,30 +242,39 @@ def gnn_predictor():
         models.append(graph_nets.GraphNet(layer, lookback, output_size))
 
     models = [graph_nets.GraphNet(SAGEConv, lookback, output_size)]
-    for i in range(len(models)): #Grid search loop
+
+
+
+    for i in range(len(models)):
         model = models[i]
+        print(model)
+
+
+        #Split dataset
         dataset = dataset.shuffle()
 
         sample = len(dataset)
-        # Make dataset smaller for quick testing
         sample *= 1.0
         train_dataset = dataset[:int(0.8 * sample)]
         val_dataset = dataset[int(0.8 * sample):int(0.9 * sample)]
         test_dataset = dataset[int(0.9 * sample):int(sample)]
 
-        print(model)
 
-        batch_size = 256
+        #In this particular experiment, recurrent graph nets have a higher learning rate
         lr = 0.005
         if type(model) is graph_nets.RecurrentGraphNet:
-            # alter filter size, what else can I do to make these things work? lookback?
             lr = 0.05
 
         optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+
+        #Create batches
+        batch_size = 256
         train_loader = DataLoader(train_dataset, batch_size=batch_size)
         val_loader = DataLoader(val_dataset, batch_size=batch_size)
         test_loader = DataLoader(test_dataset, batch_size=batch_size)
 
+
+        # Calculate training, validation, and testing loss for each epoch
         num_epochs = 20
         val_losses = []
         for epoch in range(num_epochs):
@@ -291,6 +288,8 @@ def gnn_predictor():
                                                                                                                 train_acc,
                                                                                                                 val_acc,
                                                                                                                   test_acc))
+
+        #Set labels and plot loss curves for validation
         x = np.arange(0, num_epochs)
         plt.title("Adding Residual to LEPooling")
         plt.xlabel('Epoch')
@@ -302,6 +301,8 @@ def gnn_predictor():
 
 
 if __name__ == "__main__":
+
+    #Initial parsing of dataset
     df = pd.read_csv('data/demand-data/time_series_15min_singleindex_filtered.csv')
     df = df.drop(columns=drop_columns)
     df = df.fillna(method='pad')

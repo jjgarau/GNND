@@ -1,58 +1,42 @@
 import torch
 from torch_geometric.nn import TopKPooling
-from torch_geometric.nn import SAGEConv, LEConv
 from torch_geometric.nn import global_mean_pool as gap, global_max_pool as gmp
 import torch.nn.functional as F
-from torch_geometric_temporal.nn import DCRNN, GConvGRU, GConvLSTM
+from torch_geometric.utils import dropout_adj
 
-country_codes = ['AT', 'BE', 'DE', 'HU', 'LU', 'NL']
+#Abstracted classes for Graph Neural Networks
 
+class GraphLinear(torch.nn.Linear):
+    """This is the exact same as torch.nn.Linear,
+    except that it can take edge_index, edge_attr and do nothing with them.
+    Makes it interchangeable with graph neural network modules."""
 
-class DeeperGraphNet(torch.nn.Module):
-    """Deeper version of vanilla SAGEConv."""
-    def __init__(self, lookback):
-        super(DeeperGraphNet, self).__init__()
+    def forward(self, input, edge_index, edge_attr):
+        return super(GraphLinear, self).forward(input)
 
-        dim = 64
-        self.conv1 = SAGEConv(lookback, dim)
-        self.pool1 = TopKPooling(dim, ratio=0.8)
-        self.conv2 = SAGEConv(dim, dim)
-        self.pool2 = TopKPooling(dim, ratio=0.8)
-        self.conv3 = SAGEConv(dim, dim)
-        self.pool3 = TopKPooling(dim, ratio=0.8)
-        self.conv4 = SAGEConv(dim, dim)
-        self.pool4 = TopKPooling(dim, ratio=0.8)
-        self.lin1 = torch.nn.Linear(dim * 2, dim)
-        self.lin2 = torch.nn.Linear(dim, len(country_codes))
-        self.act1 = torch.nn.ReLU()
-
-    def forward(self, data):
-        x, edge_index, batch = data.x, data.edge_index, data.batch
-        x = F.relu(self.conv1(x, edge_index))
-        x, edge_index, _, batch, _, _ = self.pool1(x, edge_index, None, batch)
-        x1 = torch.cat([gmp(x, batch), gap(x, batch)], dim=1)
-        x = F.relu(self.conv2(x, edge_index))
-        x, edge_index, _, batch, _, _ = self.pool2(x, edge_index, None, batch)
-        x2 = torch.cat([gmp(x, batch), gap(x, batch)], dim=1)
-        x = F.relu(self.conv3(x, edge_index))
-        x, edge_index, _, batch, _, _ = self.pool3(x, edge_index, None, batch)
-        x3 = torch.cat([gmp(x, batch), gap(x, batch)], dim=1)
-        x = F.relu(self.conv4(x, edge_index))
-        x, edge_index, _, batch, _, _ = self.pool4(x, edge_index, None, batch)
-        x4 = torch.cat([gmp(x, batch), gap(x, batch)], dim=1)
-        x = x1 + x2 + x3 + x4
-        x = self.lin1(x)
-        x = self.act1(x)
-        x = self.lin2(x)
-        return x
 
 class GNN(torch.nn.Module):
-    """GNN generalized for any layer type and number of layers"""
-    def __init__(self, layer, num_layers, lookback, output_size, dim=64):
-        """Layer is a lambda function taking input_channels and output_channels and returning a conv layer."""
+    """
+    Generalized Graph Neural Network whose parameters allow for the full range of testing.
+    Parameters:
+        layer: torch.nn.Module - type of GNN from torch_geometric_temporal.nn to use (can also be a lambda function taking (input_channels, output_channels) and returning torch.nn.Module
+        num_layers: int - number of repetitions of layer to use in sequence (depth of GNN)
+        lookback: int - number of input node features
+        output_size: int - number of nodes to predict
+        dim: int - length of hidden embedding vectors
+        res_factors: [int] - Array of length num_layers, containing coefficient to residual at corresponding layers
+        dropouts: [int] - Indices of layers in which to include dropout during testing
+    """
+
+    def __init__(self, layer, num_layers, lookback, output_size, dim=64, res_factors=None, dropouts=[]):
         super(GNN, self).__init__()
 
         self.dim = dim
+        if res_factors is None:
+            self.res_factors = [0.0] * num_layers
+        else:
+            self.res_factors = res_factors
+        self.dropouts = dropouts
         self.lookback = lookback
         self.output_size = output_size
         self.hidden = torch.nn.ModuleList([layer(lookback, dim)])
@@ -68,53 +52,119 @@ class GNN(torch.nn.Module):
     def forward(self, data):
         x, edge_index, edge_attr, batch = data.x, data.edge_index, data.edge_attr, data.batch
 
-        x = F.relu(self.hidden[0](x, edge_index))
+        # Pad input and multiply by res_factor to calculate residual
+        residual = self.res_factors[0] * F.pad(x, (0, self.dim - self.lookback), value=0)
+
+        # Forward first layer
+        x = residual + F.relu(self.hidden[0](x, edge_index))
+
+        # Pooling
         x, edge_index, edge_attr, batch, _, _ = self.pools[0](x, edge_index, edge_attr, batch)
         summation = torch.cat([gmp(x, batch), gap(x, batch)], dim=1)
 
+        # Repeat for depth - 1
         for n in range(1, self.num_layers):
-            x = F.relu(self.hidden[n](x, edge_index))
+
+            # Update edges if there is a dropout layer
+            if n in self.dropouts:
+                edge_index, edge_attr = dropout_adj(edge_index, edge_attr=edge_attr, training=self.training)
+
+            # Calculate residual
+            residual = self.res_factors[n] * x
+
+            # Forward nth layer
+            x = residual + F.relu(self.hidden[n](x, edge_index))
+
+            # Pooling
             x, edge_index, edge_attr, batch, _, _ = self.pools[n](x, edge_index, edge_attr, batch)
             summation += torch.cat([gmp(x, batch), gap(x, batch)], dim=1)
 
         x = summation
+
+        # Pass through final linear transformations and activation
         x = self.lin1(x)
         x = self.act1(x)
         x = self.lin2(x)
         return x
 
-class SAGEConvNet(torch.nn.Module):
-    """Vanilla SAGEConv"""
-    def __init__(self, lookback, output_size, dim=64):
-        super(SAGEConvNet, self).__init__()
+
+class GNNModule(torch.nn.Module):
+    """
+    Generalized Graph Neural Network whose parameters allow for the full range of testing,
+    without the linear transformations and activation at the end, for use in cell of RNNs.
+    Parameters:
+        layer: torch.nn.Module - type of GNN from torch_geometric_temporal.nn to use (can also be a lambda function taking (input_channels, output_channels) and returning torch.nn.Module
+        num_layers: int - number of repetitions of layer to use in sequence (depth of GNN)
+        lookback: int - number of input node features
+        output_size: int - number of nodes to predict
+        dim: int - length of hidden embedding vectors
+        res_factors: [int] - Array of length num_layers, containing coefficient to residual at corresponding layers
+        dropouts: [int] - Indices of layers in which to include dropout during testing
+        bias: bool
+    """
+    def __init__(self, layer, num_layers, lookback, dim=64, res_factors=None, dropouts=[], bias=True):
+        super(GNNModule, self).__init__()
 
         self.dim = dim
+        if res_factors is None:
+            self.res_factors = [0.0] * num_layers
+        else:
+            self.res_factors = res_factors
+        self.dropouts = dropouts
         self.lookback = lookback
-        self.conv1 = SAGEConv(lookback, dim)
-        self.pool1 = TopKPooling(dim, ratio=0.8)
-        self.conv2 = SAGEConv(dim, dim)
-        self.pool2 = TopKPooling(dim, ratio=0.8)
-        self.lin1 = torch.nn.Linear(dim * 2, dim)
-        self.lin2 = torch.nn.Linear(dim, output_size) #len(country_codes)) for demand, 20 for chickenpox
-        self.act1 = torch.nn.ReLU()
+        self.hidden = torch.nn.ModuleList([layer(lookback, dim)])
+        self.pools = torch.nn.ModuleList([TopKPooling(dim, ratio=0.8)])
+        self.num_layers = num_layers
+        for n in range(1, num_layers):
+            self.hidden.append(layer(dim, dim))
+            self.pools.append(TopKPooling(dim, ratio=0.8))
 
-    def forward(self, data):
-        x, edge_index, edge_attr, batch = data.x, data.edge_index, data.edge_attr, data.batch
-        x = F.relu(self.conv1(x, edge_index))
-        x, edge_index, edge_attr, batch, _, _ = self.pool1(x, edge_index, edge_attr, batch)
-        x1 = torch.cat([gmp(x, batch), gap(x, batch)], dim=1)
-        x = F.relu(self.conv2(x, edge_index))
-        x, edge_index, edge_attr, batch, _, _ = self.pool2(x, edge_index, edge_attr, batch)
-        x2 = torch.cat([gmp(x, batch), gap(x, batch)], dim=1)
-        x = x1 + x2
-        x = self.lin1(x)
-        x = self.act1(x)
-        x = self.lin2(x)
+    def forward(self, x, edge_index, edge_attr=None, batch=None):
 
+        # Pad input and multiply by res_factor to calculate residual
+        residual = self.res_factors[0]*F.pad(x, (0, self.dim - self.lookback), value=0)
+
+        # Forward first layer
+        x = residual + F.relu(self.hidden[0](x, edge_index, edge_attr))
+
+        #Pooling currently commented out as hotfix
+        # x, edge_index, edge_attr, batch, _, _ = self.pools[0](x, edge_index, edge_attr, batch)
+        # summation = torch.cat([gmp(x, batch), gap(x, batch)], dim=1)
+
+        # Repeat for depth - 1
+        for n in range(1, self.num_layers):
+
+            # Update edges if there is a dropout layer
+            if n in self.dropouts:
+                edge_index, edge_attr = dropout_adj(edge_index, edge_attr=edge_attr, training=self.training)
+
+            # Calculate residual
+            residual = self.res_factors[n]*x
+
+            # Forward nth layer
+            x = residual + F.relu(self.hidden[n](x, edge_index, edge_attr))
+
+            #Pooling
+            # x, edge_index, edge_attr, batch, _, _ = self.pools[n](x, edge_index, edge_attr, batch)
+            # summation += torch.cat([gmp(x, batch), gap(x, batch)], dim=1)
+
+        # x = summation
+
+        #Return x without final transformations and activation
         return x
 
+
 class GraphNet(torch.nn.Module):
-    """Vanilla GNN"""
+    """Vanilla GNN -
+    No longer used, as it has been better abstracted to the GNN class.
+    This is essentially the original best performer on the demand dataset.
+    Parameters:
+        layer: torch.nn.Module - type of GNN to use
+        lookback: int - number of input node features
+        output_size: int - number of nodes to predict
+        dim: int - length of hidden embedding vectors
+        res_factor: int - value of 0 indicates not to use residual, value of 1 indicates to use residual
+    """
     def __init__(self, layer, lookback, output_size, dim=64, res_factor=0):
         super(GraphNet, self).__init__()
 
@@ -126,15 +176,15 @@ class GraphNet(torch.nn.Module):
         self.conv2 = layer(dim, dim)
         self.pool2 = TopKPooling(dim, ratio=0.8)
         self.lin1 = torch.nn.Linear(dim * 2, dim)
-        self.lin2 = torch.nn.Linear(dim, output_size) #len(country_codes)) for demand, 20 for chickenpox
+        self.lin2 = torch.nn.Linear(dim, output_size)
         self.act1 = torch.nn.ReLU()
 
     def forward(self, data):
         x, edge_index, edge_attr, batch = data.x, data.edge_index, data.edge_attr, data.batch
-        x = self.res_factor*F.pad(x, (0, self.dim - self.lookback), value=0) + F.relu(self.conv1(x, edge_index)) #x=[1536, 5] edge_index = [2, 3840] edge_attr=[3840, 1]
+        x = self.res_factor*F.pad(x, (0, self.dim - self.lookback), value=0) + F.relu(self.conv1(x, edge_index))
         x, edge_index, edge_attr, batch, _, _ = self.pool1(x, edge_index, edge_attr, batch)
         x1 = torch.cat([gmp(x, batch), gap(x, batch)], dim=1)
-        x = self.res_factor*x + F.relu(self.conv2(x, edge_index)) #x=[1280, 64] edge_index = [2, 2560] edge_attr=[2560, 1]
+        x = self.res_factor*x + F.relu(self.conv2(x, edge_index))
         x, edge_index, edge_attr, batch, _, _ = self.pool2(x, edge_index, edge_attr, batch)
         x2 = torch.cat([gmp(x, batch), gap(x, batch)], dim=1)
         x = x1 + x2
@@ -144,56 +194,33 @@ class GraphNet(torch.nn.Module):
 
         return x
 
-class LEPooling(torch.nn.Module):
-    """Replace TopKPooling with LEConv layer"""
-    def __init__(self, layer, lookback, output_size, dim=64, res_factor=0):
-        super(LEPooling, self).__init__()
-
-        self.res_factor = res_factor
-        self.dim = dim
-        self.lookback = lookback
-        self.conv1 = layer(lookback, dim)
-        self.pool1 = LEConv(dim, dim)
-        self.conv2 = layer(dim, dim)
-        self.pool2 = LEConv(dim, dim)
-        self.lin1 = torch.nn.Linear(dim * 2, dim)
-        self.lin2 = torch.nn.Linear(dim, output_size) #len(country_codes)) for demand, 20 for chickenpox
-        self.act1 = torch.nn.ReLU()
-
-    def forward(self, data):
-        x, edge_index, edge_attr, batch = data.x, data.edge_index, data.edge_attr, data.batch
-        x = self.res_factor*F.pad(x, (0, self.dim - self.lookback), value=0) + F.relu(self.conv1(x, edge_index))
-        x = self.pool1(x, edge_index, edge_weight=edge_attr)
-        x1 = torch.cat([gmp(x, batch), gap(x, batch)], dim=1) #x=[1536,64] edge_index=[2, 3840] edge_attr=[3840, 2]
-        x = self.res_factor*x + F.relu(self.conv2(x, edge_index))
-        x = self.pool2(x, edge_index, edge_weight=edge_attr)
-        x2 = torch.cat([gmp(x, batch), gap(x, batch)], dim=1)
-        x = x1 + x2
-        x = self.lin1(x)
-        x = self.act1(x)
-        x = self.lin2(x)
-
-        return x
 
 class RecurrentGraphNet(torch.nn.Module):
-    """GNNs from PyTorch Geometric Temporal"""
-    def __init__(self, layer, lookback, output_size, dim=64):
+    """GNNs from PyTorch Geometric Temporal -
+    This is the previous and incorrect implementation, kept for historical record.
+    Parameters:
+        layer: torch.nn.Module - type of GNN from torch_geometric_temporal.nn to use
+        lookback: int - number of input node features
+        output_size: int - number of nodes to predict
+        dim: int - length of hidden embedding vectors
+        filter_size: int - Chebyshev filter size
+    """
+    def __init__(self, layer, lookback, output_size, dim=64, filter_size=3):
         super(RecurrentGraphNet, self).__init__()
 
-        self.recurrent = layer(lookback, dim, 1) #last param is Chebyshev Filter Size
-        self.pool1 = TopKPooling(dim, ratio=0.8)
-        self.lin1 = torch.nn.Linear(dim * 2, dim)
+        self.layer = layer
+        self.filter_size = filter_size
+        self.recurrent = layer(lookback, dim, filter_size)
+        self.lin1 = torch.nn.Linear(dim, dim)
         self.lin2 = torch.nn.Linear(dim, output_size)
         self.act1 = torch.nn.ReLU()
 
     def forward(self, data):
-        x, edge_index, edge_attr, batch = data.x, data.edge_index, data.edge_attr, data.batch
+        x, edge_index, edge_attr = data.x, data.edge_index, data.edge_attr
         x = self.recurrent(x, edge_index, edge_attr.reshape([edge_attr.shape[0]]))
         if type(x) is tuple:
-            x = x[0]
+            x = x[0] #[0] = hidden state, [1] = cell state
         x = F.relu(x)
-        x, edge_index, edge_attr, batch, _, _ = self.pool1(x, edge_index, edge_attr, batch)
-        x = torch.cat([gmp(x, batch), gap(x, batch)], dim=1)
         x = self.lin1(x)
         x = self.act1(x)
         x = self.lin2(x)

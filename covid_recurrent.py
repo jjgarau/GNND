@@ -1,52 +1,26 @@
 import torch
 from torch_geometric.data import InMemoryDataset, Data, DataLoader
 import pandas as pd
-import itertools
 from tqdm import tqdm
 from util import *
 import graph_nets
-from torch_geometric.nn import SAGEConv, LEConv
+from weight_sage import WeightedSAGEConv
 import matplotlib.pyplot as plt
 from geopy.distance import geodesic
 import bisect
-from torch_geometric_temporal.nn import DCRNN, GConvLSTM, GConvGRU
+import numpy as np
+from rnn import RNN, LSTM, GRU
 
-
-#Testing for COVID Dataset
-
-
-def draw_map(m, scale=0.2):
-    """Utility function to draw map on top of matplotlib pyplot"""
-    # draw a shaded-relief image
-    m.shadedrelief(scale=scale)
-
-    # lats and longs are returned as a dictionary
-    lats = m.drawparallels(np.linspace(-90, 90, 13))
-    lons = m.drawmeridians(np.linspace(-180, 180, 13))
-
-    # keys contain the plt.Line2D instances
-    lat_lines = itertools.chain(*(tup[1][0] for tup in lats.items()))
-    lon_lines = itertools.chain(*(tup[1][0] for tup in lons.items()))
-    all_lines = itertools.chain(lat_lines, lon_lines)
-
-    # cycle through these lines and set the desired style
-    for line in all_lines:
-        line.set(linestyle='-', alpha=0.3, color='w')
-
+#Test Recurrent Neural Networks on COVID Dataset
+#There is a separate file because the training pattern is slightly different,
+#and I am almost exclusively using RNNs at this point.
 
 lookback = 5
 
 class COVIDDataset(InMemoryDataset):
-    """
-    Each snapshot in this dataset is a graph with
-    node features being new cases in the country from previous 5 dates,
-    edges being between any countries within threshold distance, or else a min number of connections per country,
-    and edge weights being geodesic distance between land mass centroids of the countries
-    """
-    def __init__(self, root, transform=None, pre_transform=None, should_visualize_data=False):
+    def __init__(self, root, transform=None, pre_transform=None):
         super(COVIDDataset, self).__init__(root, transform, pre_transform)
         self.data, self.slices = torch.load(self.processed_paths[0])
-        self.should_visualize_data = should_visualize_data
 
     @property
     def raw_file_names(self):
@@ -61,7 +35,7 @@ class COVIDDataset(InMemoryDataset):
 
     def process(self):
 
-        # Determine edge index
+        #Determine edge_index: Closest 3 countries are connected
 
         DISTANCE_THRESHOLD = 250 #km
         EDGES_PER_NODE = 3
@@ -89,8 +63,6 @@ class COVIDDataset(InMemoryDataset):
             target_nodes += countries[:EDGES_PER_NODE]
             edge_attrs += distances[:EDGES_PER_NODE]
 
-
-
         torch_def = torch.cuda if torch.cuda.is_available() else torch
         for i in tqdm(range(len(df) - lookback)):
             # Node Features
@@ -111,30 +83,6 @@ class COVIDDataset(InMemoryDataset):
             data_list.append(data)
         data, slices = self.collate(data_list)
         torch.save((data, slices), self.processed_paths[0])
-
-        # Optionally, visualize the graph on a map
-        if self.should_visualize_data:
-            # Create Basemap
-            fig = plt.figure(figsize=(8, 8))
-            # For Europe dataset
-            m = Basemap(projection='lcc', resolution=None, lat_0=30, lon_0=-20,
-                        llcrnrlat=30, llcrnrlon=-20, urcrnrlat=70, urcrnrlon=80)
-            # For global data
-            # m = Basemap(projection='cyl', resolution=None,
-            #             llcrnrlat=-90, urcrnrlat=90,
-            #             llcrnrlon=-180, urcrnrlon=180, )
-            draw_map(m)
-
-            #Collect coordinates
-            coordinates = [country_centroids[nations[i]] for i in source_nodes]
-            coordinates2 = [country_centroids[nations[i]] for i in target_nodes]
-            for i in range(len(coordinates)):
-                m.drawgreatcircle(coordinates[i][1], coordinates[i][0], coordinates2[i][1], coordinates2[i][0])
-
-            #Draw coordinates on map
-            m.scatter([centroid[1] for centroid in country_centroids.values()],
-                      [centroid[0] for centroid in country_centroids.values()], latlon=True, zorder=10)
-            plt.show()
 
 
 def gnn_predictor():
@@ -158,52 +106,72 @@ def gnn_predictor():
     loss_func = mase_loss
 
 
-    #Design models to test
-    models = [
-
-        graph_nets.GNN(SAGEConv, 5, lookback, len(nations), dim=128, res_factors=[0.0, 1.0, 0.0, 0.0, 1.0]),
-        graph_nets.RecurrentGraphNet(GConvLSTM, lookback, len(nations), dim=128),
+    # Design models for testing
+    output_gnns = [
+        WeightedSAGEConv
     ]
 
-    for i in range(len(models)):
+    for i in range(len(output_gnns)):
 
-        model = models[i]
+        model = RNN(lookback, module=(lambda in_channels, out_channels, bias: graph_nets.GraphLinear(in_channels, out_channels, bias=bias)), gnn=output_gnns[i])
         print(model)
 
 
-        optimizer = torch.optim.Adam(model.parameters(), lr=0.005*(1+i))
+        optimizer = torch.optim.Adam(model.parameters(), lr=0.01)
 
 
-        #Split dataset into batches
-        batch_size = 128
-        train_loader = DataLoader(train_dataset, batch_size=batch_size)
-        val_loader = DataLoader(val_dataset, batch_size=batch_size)
-        test_loader = DataLoader(test_dataset, batch_size=batch_size)
-
-
-        # Evaluate losses for each epoch
-        num_epochs = 100
+        num_epochs = 200
         val_losses = []
         for epoch in range(num_epochs):
-            loss = train_gnn(model, train_loader, optimizer, loss_func, device)
-            loss /= len(train_dataset)
-            train_acc = evaluate_gnn(model, train_loader, device)
-            val_acc = evaluate_gnn(model, val_loader, device)
-            test_acc = evaluate_gnn(model, test_loader, device)
-            val_losses.append(val_acc)
-            print('Epoch: {:03d}, Loss: {:.5f}, Train Loss: {:.5f}, Val Loss: {:.5f}, Test Loss: {:.5f}'.format(epoch, loss,
-                                                                                                                train_acc,
-                                                                                                                val_acc,
-                                                                                                                     test_acc))
-        # Set labels and display loss curves for validation
+
+            # TRAIN MODEL
+            model.train()
+            train_cost = 0
+            for time, snapshot in enumerate(train_dataset):
+                y_hat = model(snapshot)
+                train_cost += loss_func(y_hat, snapshot.y)
+            train_cost /=  time + 1
+            train_cost.backward()
+            optimizer.step()
+            optimizer.zero_grad()
+
+            # EVALUATE MODEL - VALIDATION
+            model.eval()
+            val_cost = 0
+            for time, snapshot in enumerate(val_dataset):
+                y_hat = model(snapshot)
+                val_cost += loss_func(y_hat, snapshot.y)
+            val_cost /= time + 1
+            val_cost = val_cost.item()
+            val_losses.append(val_cost)
+
+            # EVALUATE MODEL - TEST
+            test_cost = 0
+            for time, snapshot in enumerate(test_dataset):
+                y_hat = model(snapshot)
+                test_cost += loss_func(y_hat, snapshot.y)
+            test_cost /= time + 1
+            test_cost = test_cost.item()
+
+            #Display losses for this epoch
+            print('Epoch: {:03d}, Train Loss: {:.5f}, Val Loss: {:.5f}, Test Loss: {:.5f}'.format(epoch,
+                                                                                                                train_cost,
+                                                                                                                val_cost,
+                                                                                                                test_cost))
+
+        # Set labels and plot loss curves for validation
         x = np.arange(0, num_epochs)
-        labels = ["SOTA", "GConvLSTM"]
-        plt.title('Recurrent Networks')
+        labels = ["LSTM + SAGE"]
+        label = labels[i]
+        plt.title('Testing new SOTA on Demand Dataset')
         plt.xlabel('Epoch')
         plt.ylabel('MASE Loss')
-        plt.plot(x, val_losses, label=str(labels[i]))
+        plt.plot(x, val_losses, label=str(label))
+
+
     plt.legend()
     plt.show()
+
 
 if __name__ == '__main__':
     #Get country centroids data
@@ -214,6 +182,8 @@ if __name__ == '__main__':
     df2 = df2[df2.continent == 'Europe']
 
 
+
+
     df = pd.read_csv('data/covid-data/covid-19-world-cases-deaths-testing.csv')
     columns = ['location', 'date', 'new_cases']
     df = df.filter(columns)
@@ -221,9 +191,9 @@ if __name__ == '__main__':
 
     df = df[df.location.isin(df2.name_long.values)]
     nations = df.location.unique()
-    nations = np.delete(nations, [len(nations)-1, len(nations)-2]) #Remove World and International columns
+    nations = np.delete(nations, [len(nations)-1, len(nations)-2]) #Remove World and International
 
-    #Commented out unless creating the dataset again
+    #Commented unless remaking dataset
     # dates = df.date.unique()
     # new_data = {'Time': range(len(dates))}
     # for i in range(len(nations)):
@@ -258,5 +228,4 @@ if __name__ == '__main__':
         else:
             print("Missing coordinates for country", nation)
 
-    #Run training, validation, and testing on the dataset
     gnn_predictor()

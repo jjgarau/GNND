@@ -16,12 +16,21 @@ fi
 
 if [ "$CUDA" != "None" ]
 then
-    pip3 install torch
-    pip3 install torch-scatter==latest+${CUDA} -f https://pytorch-geometric.com/whl/torch-1.7.0.html
-    pip3 install torch-sparse==latest+${CUDA} -f https://pytorch-geometric.com/whl/torch-1.7.0.html
-    pip3 install torch-cluster==latest+${CUDA} -f https://pytorch-geometric.com/whl/torch-1.7.0.html
-    pip3 install torch-spline-conv==latest+${CUDA} -f https://pytorch-geometric.com/whl/torch-1.7.0.html
-    pip3 install torch-geometric
-    pip3 install torch-geometric-temporal
-    pip3 install geopy
+#    pip3 install torch
+#    pip3 install torch-scatter==latest+${CUDA} -f https://pytorch-geometric.com/whl/torch-1.7.0.html
+#    pip3 install torch-sparse==latest+${CUDA} -f https://pytorch-geometric.com/whl/torch-1.7.0.html
+#    pip3 install torch-cluster==latest+${CUDA} -f https://pytorch-geometric.com/whl/torch-1.7.0.html
+#    pip3 install torch-spline-conv==latest+${CUDA} -f https://pytorch-geometric.com/whl/torch-1.7.0.html
+#    pip3 install torch-geometric
+#    pip3 install torch-geometric-temporal
+#    pip3 install geopy
+
+    # install geos
+    brew install geos
+    cd /usr/lib
+    sudo ln -s libgeos-3.3.3.so libgeos.so
+    sudo ln -s libgeos-3.3.3.so libgeos.so.1
+    curl -OL https://github.com/matplotlib/basemap/archive/master.zip
+    cd /Users/natesesti/Desktop/GNND/GNND
+    pip install master.zip
 fi

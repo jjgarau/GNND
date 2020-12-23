@@ -9,6 +9,8 @@ import graph_nets
 from common import *
 from torch_geometric_temporal import GConvGRU, GConvLSTM, GCLSTM, DCRNN
 
+#Original file for testing the Chickenpox dataset - later moved to torch_geometric_temporal_example.py
+
 lookback = 5
 output_size = 20
 
@@ -128,9 +130,3 @@ if __name__ == "__main__":
     df = loader.get_dataset()
 
     gnn_predictor()
-
-
-#try squared error for chickenpox (reporting and optimization loss function can be different)
-#It's a 3D problem (T (lookforward), lookback, and dataset)
-#RESNet y = act(f(X) + b) -> y = X + act(f(X) + b)
-#Look around for how to change shape on resid when dim doesn't match
