@@ -1,5 +1,8 @@
-
+__pycache__
 .DS_Store
 .idea/*
+data/*
+df.csv
+basemap-1.0.7/*
+country_centroids.csv
 yoochoose-data/*
-data

@@ -1,8 +1,8 @@
 from typing import Union, Tuple
 from torch_geometric.typing import OptPairTensor, Adj, Size
 
-from torch import Tensor
-from torch.nn import Linear
+from torch import Tensor, randn, cat
+from torch.nn import Linear, Parameter
 import torch.nn.functional as F
 from torch_sparse import SparseTensor, matmul
 from torch_geometric.nn.conv import MessagePassing
@@ -48,20 +48,25 @@ class WeightedSAGEConv(MessagePassing):
         self.lin_l = Linear(in_channels[0], out_channels, bias=bias)
         self.lin_r = Linear(in_channels[1], out_channels, bias=False)
 
+        self.lin_m = Linear(1, 1, bias=bias)
+        self.lin_ew = Linear(1, 1, bias=bias)
+
+        self.edge_attr = Parameter(randn(376, 1))
+
         self.reset_parameters()
 
     def reset_parameters(self):
         self.lin_l.reset_parameters()
         self.lin_r.reset_parameters()
 
-    def forward(self, x: Union[Tensor, OptPairTensor], edge_index: Adj, edge_attr: Tensor = None,
+    def forward(self, x: Union[Tensor, OptPairTensor], edge_index: Adj, edge_weight: Tensor = None,
                 size: Size = None) -> Tensor:
-        """"""
+
         if isinstance(x, Tensor):
             x: OptPairTensor = (x, x)
 
         # propagate_type: (x: OptPairTensor)
-        out = self.propagate(edge_index, x=x, size=size)
+        out = self.propagate(edge_index, x=x, size=size, edge_weight=edge_weight)
         out = self.lin_l(out)
 
         x_r = x[1]
@@ -73,8 +78,11 @@ class WeightedSAGEConv(MessagePassing):
 
         return out
 
-    def message(self, x_j: Tensor) -> Tensor:
-        return x_j
+    def message(self, x_i: Tensor, x_j: Tensor, edge_weight) -> Tensor:
+        return x_i
+        out = self.lin_m(x_j - x_i)
+        weight = self.lin_ew(self.edge_attr)
+        return out if self.edge_attr is None else out * weight
 
     def message_and_aggregate(self, adj_t: SparseTensor,
                               x: OptPairTensor) -> Tensor:

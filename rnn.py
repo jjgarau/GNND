@@ -3,6 +3,8 @@ from torch.nn import Parameter
 from weight_sage import WeightedSAGEConv
 from torch_geometric.nn.inits import glorot, zeros
 import torch.nn.functional as F
+from torch.nn import LSTMCell, GRUCell, RNNCell
+from graph_nets import GraphLinear
 
 #Recurrent Neural Network Modules
 
@@ -319,7 +321,7 @@ class GRU(torch.nn.Module):
 
 
     def forward(self, X: torch.FloatTensor, edge_index: torch.LongTensor,
-                edge_weight: torch.FloatTensor=None, H: torch.FloatTensor=None) -> torch.FloatTensor:
+                edge_weight: torch.FloatTensor=None, H: torch.FloatTensor=None, C: torch.FloatTensor=None) -> torch.FloatTensor:
         """
         Making a forward pass. If edge weights are not present the forward pass
         defaults to an unweighted graph. If the hidden state matrix is not present
@@ -339,8 +341,33 @@ class GRU(torch.nn.Module):
         R = self._calculate_reset_gate(X, edge_index, edge_weight, H)
         H_tilde = self._calculate_candidate_state(X, edge_index, edge_weight, H, R)
         H = self._calculate_hidden_state(Z, H, H_tilde)
-        return H
+        return H, C
 
+class VanillaRNN(torch.nn.Module):
+    def __init__(self, in_channels: int, out_channels: int, bias: bool=True, module=WeightedSAGEConv):
+        super(VanillaRNN, self).__init__()
+
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        self.module = module
+        self.bias = bias
+
+        #Hidden input
+        self.conv_h_i = self.module(in_channels=self.in_channels,
+                                    out_channels=self.out_channels,
+                                    bias=self.bias)
+
+        #Hidden hidden
+        self.conv_h_h = self.module(in_channels=self.in_channels,
+                                    out_channels=self.out_channels,
+                                    bias=self.bias)
+
+    def forward(self, X: torch.FloatTensor, edge_index: torch.LongTensor, edge_weight: torch.FloatTensor=None, H: torch.FloatTensor=None, C: torch.FloatTensor=None):
+        input = self.conv_h_i(X, edge_index, edge_weight)
+        hidden = self.conv_h_h(H, edge_index, edge_weight)
+        H = torch.tanh(input + hidden)
+
+        return H, C
 
 
 class RNN(torch.nn.Module):
@@ -354,25 +381,39 @@ class RNN(torch.nn.Module):
         dim: int - number of features of embedding for each node
         module: torch.nn.Module - to be used in the LSTM to calculate each gate
     """
-    def __init__(self, node_features, output=1, dim=32, module=WeightedSAGEConv, rnn=LSTM, gnn=None):
+    def __init__(self, node_features=1, output=1, dim=32, module=GraphLinear, rnn=LSTM, gnn=WeightedSAGEConv):
         super(RNN, self).__init__()
-        self.recurrent = rnn(node_features, dim, module=module)
-        if gnn:
-            self.gnn = gnn(node_features, dim)
+        self.dim = dim
+        self.gnn = gnn(node_features, dim)
+        self.gnn_2 = gnn(2 * dim, 2 * dim)
+        if rnn:
+            self.recurrent = rnn(dim, dim, module=module)
         else:
-            self.gnn = None
-        self.lin1 = torch.nn.Linear(dim, dim)
+            self.recurrent = None
+        self.lstm = RNNCell(dim, dim)
+        self.lin1 = torch.nn.Linear(2 * dim, dim)
         self.lin2 = torch.nn.Linear(dim, output)
         self.act1 = torch.nn.ReLU()
 
-    def forward(self, data):
+    def forward(self, data, h=None, c=None):
         x, edge_index, edge_attr = data.x, data.edge_index, data.edge_attr
-        h = self.recurrent(x, edge_index, edge_attr)[0]
-        if self.gnn:
-            h = self.gnn(x, edge_index, edge_attr)
-        h = F.relu(h)
-        h = self.lin1(h)
-        h = self.act1(h)
-        h = self.lin2(h)
+        x = self.gnn(x, edge_index, edge_attr)
+        x = F.relu(x)
 
-        return h
+        if h is None:
+            h = torch.zeros(x.shape[0], self.dim)
+        if c is None:
+            c = torch.zeros(x.shape[0], self.dim)
+
+        if self.recurrent:
+            h, c = self.recurrent(x, edge_index, edge_attr, h, c) #self.lstm(x, (h))
+            #x = h
+
+        x = torch.cat((x, h), 1)
+
+        x = self.gnn_2(x, edge_index, edge_attr)
+        x = self.lin1(x)
+        x = self.act1(x)
+        x = self.lin2(x)
+
+        return x, h, c

@@ -160,9 +160,7 @@ def gnn_predictor():
 
     #Design models to test
     models = [
-
-        graph_nets.GNN(SAGEConv, 5, lookback, len(nations), dim=128, res_factors=[0.0, 1.0, 0.0, 0.0, 1.0]),
-        graph_nets.RecurrentGraphNet(GConvLSTM, lookback, len(nations), dim=128),
+        graph_nets.GNN(SAGEConv, 3, lookback, len(nations), dim=128, res_factors=[0.0, 1.0, 0.0, 0.0, 1.0])
     ]
 
     for i in range(len(models)):
@@ -175,7 +173,7 @@ def gnn_predictor():
 
 
         #Split dataset into batches
-        batch_size = 128
+        batch_size = 1
         train_loader = DataLoader(train_dataset, batch_size=batch_size)
         val_loader = DataLoader(val_dataset, batch_size=batch_size)
         test_loader = DataLoader(test_dataset, batch_size=batch_size)
