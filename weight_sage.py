@@ -35,12 +35,13 @@ class WeightedSAGEConv(MessagePassing):
     """
     def __init__(self, in_channels: Union[int, Tuple[int, int]],
                  out_channels: int, normalize: bool = False,
-                 bias: bool = True, **kwargs):  # yapf: disable
+                 bias: bool = True, weighted: bool = True, **kwargs):  # yapf: disable
         super(WeightedSAGEConv, self).__init__(aggr='mean', **kwargs)
 
         self.in_channels = in_channels
         self.out_channels = out_channels
         self.normalize = normalize
+        self.weighted = weighted
 
         if isinstance(in_channels, int):
             in_channels = (in_channels, in_channels)
@@ -48,10 +49,10 @@ class WeightedSAGEConv(MessagePassing):
         self.lin_l = Linear(in_channels[0], out_channels, bias=bias)
         self.lin_r = Linear(in_channels[1], out_channels, bias=False)
 
-        self.lin_m = Linear(1, 1, bias=bias)
+        self.lin_m = Linear(in_channels[0], in_channels[0], bias=bias)
         self.lin_ew = Linear(1, 1, bias=bias)
 
-        self.edge_attr = Parameter(randn(376, 1))
+        self.edge_attr = Parameter(randn(141, 1))
 
         self.reset_parameters()
 
@@ -79,7 +80,8 @@ class WeightedSAGEConv(MessagePassing):
         return out
 
     def message(self, x_i: Tensor, x_j: Tensor, edge_weight) -> Tensor:
-        return x_i
+        if not self.weighted:
+            return x_j
         out = self.lin_m(x_j - x_i)
         weight = self.lin_ew(self.edge_attr)
         return out if self.edge_attr is None else out * weight

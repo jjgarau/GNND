@@ -3,8 +3,10 @@ from torch.nn import Parameter
 from weight_sage import WeightedSAGEConv
 from torch_geometric.nn.inits import glorot, zeros
 import torch.nn.functional as F
-from torch.nn import LSTMCell, GRUCell, RNNCell
+from torch.nn import LSTMCell, GRUCell, RNNCell, LSTM as TorchLSTM
 from graph_nets import GraphLinear
+from torch_geometric.nn import global_mean_pool as gmp
+from torch_geometric.nn import ASAPooling, TopKPooling, EdgePooling, SAGPooling
 
 #Recurrent Neural Network Modules
 
@@ -381,37 +383,60 @@ class RNN(torch.nn.Module):
         dim: int - number of features of embedding for each node
         module: torch.nn.Module - to be used in the LSTM to calculate each gate
     """
-    def __init__(self, node_features=1, output=1, dim=32, module=GraphLinear, rnn=LSTM, gnn=WeightedSAGEConv):
+    def __init__(self, node_features=1, output=1, dim=32, module=GraphLinear, rnn=LSTM, gnn=WeightedSAGEConv, gnn_2=WeightedSAGEConv, rnn_depth=1):
         super(RNN, self).__init__()
         self.dim = dim
-        self.gnn = gnn(node_features, dim)
-        self.gnn_2 = gnn(2 * dim, 2 * dim)
-        if rnn:
-            self.recurrent = rnn(dim, dim, module=module)
+        self.rnn_depth = rnn_depth
+
+        if gnn:
+            self.gnn = gnn(node_features, dim)
+            if rnn:
+                self.recurrent = rnn(dim, dim, module=module)
+            else:
+                self.recurrent = None
         else:
-            self.recurrent = None
-        self.lstm = RNNCell(dim, dim)
+            self.gnn = None
+            if rnn:
+                self.recurrent = rnn(node_features, dim, module=module)
+            else:
+                self.recurrent = None
+        if gnn_2:
+            if gnn:
+                self.gnn_2 = gnn_2(2 * dim, 2 * dim)
+            else:
+                self.gnn_2 = gnn_2(dim + node_features, 2 * dim)
+        else:
+            self.gnn_2 = None
+
+        self.lstm = TorchLSTM(dim, dim, rnn_depth)#LSTMCell(dim, dim)
         self.lin1 = torch.nn.Linear(2 * dim, dim)
         self.lin2 = torch.nn.Linear(dim, output)
         self.act1 = torch.nn.ReLU()
 
     def forward(self, data, h=None, c=None):
         x, edge_index, edge_attr = data.x, data.edge_index, data.edge_attr
-        x = self.gnn(x, edge_index, edge_attr)
-        x = F.relu(x)
+        if self.gnn:
+            x = self.gnn(x, edge_index, edge_attr)
+            x = F.relu(x)
 
         if h is None:
             h = torch.zeros(x.shape[0], self.dim)
+            # h = torch.zeros(self.rnn_depth, 1, self.dim)
         if c is None:
             c = torch.zeros(x.shape[0], self.dim)
+            # c = torch.zeros(self.rnn_depth, 1, self.dim)
 
         if self.recurrent:
-            h, c = self.recurrent(x, edge_index, edge_attr, h, c) #self.lstm(x, (h))
-            #x = h
+            x1 = x.reshape(x.shape[0], 1, x.shape[1])
+            # h = h.reshape(h.shape[0], 1, h.shape[1])
+            # c = c.reshape(c.shape[0], 1, c.shape[1])
+            # out, (h, c) = self.lstm(x1, (h, c))
+            h, c = self.recurrent(x, edge_index, edge_attr, h, c)
 
+        # x = torch.cat((x, out.reshape(x.shape)), 1)
         x = torch.cat((x, h), 1)
-
-        x = self.gnn_2(x, edge_index, edge_attr)
+        if self.gnn_2:
+            x = self.gnn_2(x, edge_index, edge_attr)
         x = self.lin1(x)
         x = self.act1(x)
         x = self.lin2(x)

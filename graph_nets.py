@@ -110,6 +110,7 @@ class GNNModule(torch.nn.Module):
             self.res_factors = [0.0] * num_layers
         else:
             self.res_factors = res_factors
+        self.res_factors = torch.nn.Parameter(torch.randn(num_layers))
         self.dropouts = dropouts
         self.lookback = lookback
         self.hidden = torch.nn.ModuleList([layer(lookback, dim)])
@@ -119,13 +120,15 @@ class GNNModule(torch.nn.Module):
             self.hidden.append(layer(dim, dim))
             self.pools.append(TopKPooling(dim, ratio=0.8))
 
-    def forward(self, x, edge_index, edge_attr=None, batch=None):
+    def forward(self, x, edge_index, edge_attr=None, batch=None, residual=None):
 
+        if residual is None:
+            residual = torch.clone(x)
         # Pad input and multiply by res_factor to calculate residual
-        residual = self.res_factors[0]*F.pad(x, (0, self.dim - self.lookback), value=0)
+        res = torch.mul(F.pad(residual, (0, self.dim - self.lookback), value=0), self.res_factors[0])
 
         # Forward first layer
-        x = residual + F.relu(self.hidden[0](x, edge_index, edge_attr))
+        x = res + F.relu(self.hidden[0](x, edge_index, edge_attr))
 
         #Pooling currently commented out as hotfix
         # x, edge_index, edge_attr, batch, _, _ = self.pools[0](x, edge_index, edge_attr, batch)
@@ -139,7 +142,7 @@ class GNNModule(torch.nn.Module):
                 edge_index, edge_attr = dropout_adj(edge_index, edge_attr=edge_attr, training=self.training)
 
             # Calculate residual
-            residual = self.res_factors[n]*x
+            res = torch.mul(residual, self.res_factors[n])
 
             # Forward nth layer
             x = residual + F.relu(self.hidden[n](x, edge_index, edge_attr))
@@ -179,12 +182,14 @@ class GraphNet(torch.nn.Module):
         self.lin2 = torch.nn.Linear(dim, output_size)
         self.act1 = torch.nn.ReLU()
 
-    def forward(self, data):
+    def forward(self, data, residual=None):
         x, edge_index, edge_attr, batch = data.x, data.edge_index, data.edge_attr, data.batch
-        x = self.res_factor*F.pad(x, (0, self.dim - self.lookback), value=0) + F.relu(self.conv1(x, edge_index))
+        if residual is None:
+            residual = torch.clone(x)
+        x = torch.mul(F.pad(residual, (0, self.dim - self.lookback), value=0), self.res_factor) + F.relu(self.conv1(x, edge_index))
         x, edge_index, edge_attr, batch, _, _ = self.pool1(x, edge_index, edge_attr, batch)
         x1 = torch.cat([gmp(x, batch), gap(x, batch)], dim=1)
-        x = self.res_factor*x + F.relu(self.conv2(x, edge_index))
+        x = torch.mul(residual, self.res_factor) + F.relu(self.conv2(x, edge_index))
         x, edge_index, edge_attr, batch, _, _ = self.pool2(x, edge_index, edge_attr, batch)
         x2 = torch.cat([gmp(x, batch), gap(x, batch)], dim=1)
         x = x1 + x2
