@@ -408,7 +408,6 @@ class RNN(torch.nn.Module):
         else:
             self.gnn_2 = None
 
-        self.lstm = TorchLSTM(dim, dim, rnn_depth)#LSTMCell(dim, dim)
         self.lin1 = torch.nn.Linear(2 * dim, dim)
         self.lin2 = torch.nn.Linear(dim, output)
         self.act1 = torch.nn.ReLU()
@@ -421,19 +420,13 @@ class RNN(torch.nn.Module):
 
         if h is None:
             h = torch.zeros(x.shape[0], self.dim)
-            # h = torch.zeros(self.rnn_depth, 1, self.dim)
         if c is None:
             c = torch.zeros(x.shape[0], self.dim)
-            # c = torch.zeros(self.rnn_depth, 1, self.dim)
 
         if self.recurrent:
-            x1 = x.reshape(x.shape[0], 1, x.shape[1])
-            # h = h.reshape(h.shape[0], 1, h.shape[1])
-            # c = c.reshape(c.shape[0], 1, c.shape[1])
-            # out, (h, c) = self.lstm(x1, (h, c))
-            h, c = self.recurrent(x, edge_index, edge_attr, h, c)
+            for i in range(self.rnn_depth):
+                h, c = self.recurrent(x, edge_index, edge_attr, h, c)
 
-        # x = torch.cat((x, out.reshape(x.shape)), 1)
         x = torch.cat((x, h), 1)
         if self.gnn_2:
             x = self.gnn_2(x, edge_index, edge_attr)
