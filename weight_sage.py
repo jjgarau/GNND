@@ -52,7 +52,7 @@ class WeightedSAGEConv(MessagePassing):
         self.lin_m = Linear(in_channels[0], in_channels[0], bias=bias)
         self.lin_ew = Linear(1, 1, bias=bias)
 
-        self.edge_attr = Parameter(randn(141, 1))
+        self.edge_attr = Parameter(randn(1761, 1))
 
         self.reset_parameters()
 

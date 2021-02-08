@@ -6,7 +6,7 @@ from tqdm import tqdm
 import matplotlib.pyplot as plt
 from torch_geometric_temporal.data.dataset import ChickenpoxDatasetLoader
 import graph_nets
-from common import *
+from util import *
 from torch_geometric_temporal import GConvGRU, GConvLSTM, GCLSTM, DCRNN
 
 #Original file for testing the Chickenpox dataset - later moved to torch_geometric_temporal_example.py
@@ -69,8 +69,6 @@ def gnn_predictor():
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
     loss_func = mape_loss
-    loss_funcs = [mape_loss, mse_loss]
-
 
     layers = [SAGEConv, LEConv, TAGConv]
     recurrent_layers = [GConvLSTM, DCRNN, GConvGRU]
@@ -82,9 +80,10 @@ def gnn_predictor():
     for layer in layers:
         models.append(graph_nets.GraphNet(layer, lookback, output_size))
 
-    model = graph_nets.GraphNet(SAGEConv, lookback, output_size)
-    for loss_func in loss_funcs: #Grid search loop
+    models = [graph_nets.GraphNet(SAGEConv, lookback, output_size)]
+    for i in range(len(models)): #Grid search loop
 
+        model = models[i]
         print(model)
         batch_size = 16
         lr = 0.005
@@ -101,6 +100,7 @@ def gnn_predictor():
 
         val_losses = []
         for epoch in range(num_epochs):
+            predictions, labels = [], []
             loss = train_gnn(model, train_loader, optimizer, loss_func, device)
             loss /= len(train_dataset)
             train_acc = evaluate_gnn(model, train_loader, device)
@@ -128,5 +128,12 @@ def gnn_predictor():
 if __name__ == "__main__":
     loader = ChickenpoxDatasetLoader()
     df = loader.get_dataset()
+
+    # x = np.arange(0, len(df.targets))
+    # plt.title("Chickenpox Dataset")
+    # plt.xlabel('Time (weeks)')
+    # plt.ylabel('New Cases')
+    # plt.plot(x, [t[:4] for t in df.targets])
+    # plt.show()
 
     gnn_predictor()

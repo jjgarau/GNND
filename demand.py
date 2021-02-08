@@ -11,6 +11,8 @@ from torch_geometric_temporal import GConvGRU, GConvLSTM, DCRNN
 from util import *
 import graph_nets
 from geopy.distance import geodesic
+from rnn import RNN, LSTM
+from weight_sage import WeightedSAGEConv
 
 drop_columns = ['cet_cest_timestamp', 'DE_50hertz_load_actual_entsoe_transparency',
                 'DE_AT_LU_load_actual_entsoe_transparency', 'DE_LU_load_actual_entsoe_transparency',
@@ -241,7 +243,11 @@ def gnn_predictor():
     for layer in layers:
         models.append(graph_nets.GraphNet(layer, lookback, output_size))
 
-    models = [graph_nets.GraphNet(SAGEConv, lookback, output_size)]
+    WSC = WeightedSAGEConv
+    models = [
+        graph_nets.LagPredictor(),
+        graph_nets.GraphNet(SAGEConv, lookback, output_size)
+    ]
 
 
 
@@ -265,7 +271,8 @@ def gnn_predictor():
         if type(model) is graph_nets.RecurrentGraphNet:
             lr = 0.05
 
-        optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+        if i > 0:
+            optimizer = torch.optim.Adam(model.parameters(), lr=lr)
 
         #Create batches
         batch_size = 256
@@ -278,8 +285,11 @@ def gnn_predictor():
         num_epochs = 20
         val_losses = []
         for epoch in range(num_epochs):
-            loss = train_gnn(model, train_loader, optimizer, loss_func, device)
-            loss /= len(train_dataset)
+            predictions, labels = [], []
+            loss = 0
+            if i > 0:
+                loss = train_gnn(model, train_loader, optimizer, loss_func, device)
+                loss /= len(train_dataset)
             train_acc = evaluate_gnn(model, train_loader, device)
             val_acc = evaluate_gnn(model, val_loader, device)
             test_acc = evaluate_gnn(model, test_loader, device)
@@ -299,7 +309,6 @@ def gnn_predictor():
     plt.legend()
     plt.show()
 
-
 if __name__ == "__main__":
 
     #Initial parsing of dataset
@@ -308,6 +317,19 @@ if __name__ == "__main__":
     df = df.fillna(method='pad')
     df.columns = ['time'] + country_codes
     print('Dataset preprocessed')
+
+    x = np.arange(0, df.shape[0])
+    plt.title("Demand Dataset")
+    plt.xlabel('Time (15 min)')
+    plt.ylabel('Energy Usage (MW)')
+    y = []
+    for index, row in df.iterrows():
+        y.append(row[1:])
+        y.append(row[2:])
+        print(y[0].shape, y[1].shape)
+        break
+    plt.plot(x, y)
+    plt.show()
 
     print(df.head())
     print(df.columns)

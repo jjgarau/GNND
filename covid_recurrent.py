@@ -9,9 +9,9 @@ import matplotlib.pyplot as plt
 from geopy.distance import geodesic
 import bisect
 import numpy as np
-from rnn import RNN, LSTM, GRU, VanillaRNN
-from torch_geometric.nn import LEConv
-from torch_geometric_temporal.nn import GConvGRU, GConvLSTM
+from rnn import RNN, LSTM, GRU, VanillaRNN, PGT_DCRNN, PGT_GConvLSTM, PGT_GConvGRU, SimpleRNN
+from torch_geometric.nn import LEConv, SAGEConv
+from torch_geometric_temporal.nn import GConvGRU, GConvLSTM, GCLSTM, LRGCN
 from torch_geometric.nn import ASAPooling, TopKPooling, EdgePooling, SAGPooling
 
 #Test Recurrent Neural Networks on COVID Dataset
@@ -207,7 +207,20 @@ class COVIDDatasetSpaced(InMemoryDataset):
 
         torch_def = torch.cuda if torch.cuda.is_available() else torch
 
+        node_mask = torch.ones(len(df)).bool()
+        edge_mask = torch.ones(len(source_nodes)).bool()
+
         for i in tqdm(range(len(df) - lookback_pattern[0])):
+            edge_mask = torch.logical_not(torch.logical_xor(edge_mask, torch.bernoulli(0.95 * torch.ones(len(source_nodes))).bool()))
+            node_mask = torch.logical_not(torch.logical_xor(node_mask, torch.bernoulli(0.95 * torch.ones(len(df))).bool()))
+            inv_node_mask = ~node_mask
+            nodes_to_drop = set(torch.arange(len(df))[inv_node_mask].tolist())
+
+            temp_edge_mask = edge_mask.clone()
+            for i in range(len(source_nodes)):
+                if source_nodes[i] in nodes_to_drop or target_nodes[i] in nodes_to_drop:
+                    temp_edge_mask[i] = False
+
             # Node Features
             values_x = []
             for n in lookback_pattern:
@@ -215,15 +228,19 @@ class COVIDDatasetSpaced(InMemoryDataset):
                 values_x.append(df.iloc[m, 1:])
             values_x = pd.DataFrame(values_x).to_numpy().T
             x = torch_def.FloatTensor(values_x)
+            # x = x[node_mask, :]
 
             # Labels
             values_y = df.iloc[(i + lookback_pattern[0]):(i + lookback_pattern[0] + 1), 1:].to_numpy().T
             y = torch_def.FloatTensor(values_y)
+            # y = y[node_mask, :]
 
             # Edge Index
             edge_index = torch_def.LongTensor([source_nodes.copy(), target_nodes.copy()])
+            edge_index = edge_index[:, temp_edge_mask]
             # Edge Weights
             edge_attr = torch_def.FloatTensor([[weight] for weight in edge_attrs])
+            edge_attr = edge_attr[temp_edge_mask, :]
 
 
             data = Data(x=x, edge_index=edge_index, y=y, edge_attr=edge_attr)
@@ -236,12 +253,12 @@ def gnn_predictor():
 
     #Load and split dataset
 
-    dataset = COVIDDataset(root='data/covid-data/')
+    dataset = COVIDDatasetSpaced(root='data/covid-data/')
     dataset = dataset.shuffle()
 
     sample = len(dataset)
     # Optionally, make dataset smaller for quick testing
-    sample *= 1.0
+    sample *= 0.7
     train_dataset = dataset[:int(0.8 * sample)]
     val_dataset = dataset[int(0.8 * sample):int(0.9 * sample)]
     test_dataset = dataset[int(0.9 * sample):int(sample)]
@@ -261,8 +278,13 @@ def gnn_predictor():
 
     linear_module = lambda in_channels, out_channels, bias: graph_nets.GraphLinear(in_channels, out_channels, bias=bias)
 
+    WSC = WeightedSAGEConv
     models = [
-        RNN(len(lookback_pattern), len(nations), module=linear_module, gnn=WeightedSAGEConv)
+        RNN(module=WSC, gnn=WSC, rnn=LSTM, dim=16, gnn_2=WSC, rnn_depth=1, node_features=len(lookback_pattern)),
+        graph_nets.RecurrentGraphNet(GConvLSTM, lookback=len(lookback_pattern)),
+        graph_nets.RecurrentGraphNet(GConvGRU, lookback=len(lookback_pattern)),
+        graph_nets.RecurrentGraphNet(DCRNN, lookback=len(lookback_pattern)),
+        graph_nets.RecurrentGraphNet(GCLSTM, lookback=len(lookback_pattern)),
     ]
 
     for i in range(len(models)):
@@ -271,10 +293,10 @@ def gnn_predictor():
         print(model)
 
 
-        optimizer = torch.optim.Adam(model.parameters(), lr=0.01)
+        optimizer = torch.optim.Adam(model.parameters(), lr=0.05)
 
 
-        num_epochs = 500
+        num_epochs = 40
         val_losses = []
         h, c = None, None
         for epoch in range(num_epochs):
@@ -283,6 +305,7 @@ def gnn_predictor():
             model.train()
             train_cost = 0
             for time, snapshot in enumerate(train_dataset):
+                h, c = None, None
                 y_hat, h, c = model(snapshot, h, c)
                 train_cost += loss_func(y_hat, snapshot.y)
             train_cost /=  time + 1
@@ -290,39 +313,52 @@ def gnn_predictor():
             optimizer.step()
             optimizer.zero_grad()
 
+            with torch.no_grad():
 
+                # EVALUATE MODEL - TRAINING
+                h, c = None, None
+                model.eval()
+                train_eval_cost = 0
+                for time, snapshot in enumerate(train_dataset):
+                    h, c = None, None
+                    y_hat, h, c = model(snapshot, h, c)
+                    train_eval_cost += loss_func(y_hat, snapshot.y)
+                train_eval_cost /= time + 1
+                train_eval_cost = train_eval_cost.item()
 
-            # EVALUATE MODEL - VALIDATION
-            h, c = None, None
-            model.eval()
-            val_cost = 0
-            for time, snapshot in enumerate(val_dataset):
-                y_hat, h, c = model(snapshot, h, c)
-                val_cost += loss_func(y_hat, snapshot.y)
-            val_cost /= time + 1
-            val_cost = val_cost.item()
-            val_losses.append(val_cost)
+                # EVALUATE MODEL - VALIDATION
+                h, c = None, None
+                val_cost = 0
+                for time, snapshot in enumerate(val_dataset):
+                    h, c = None, None
+                    y_hat, h, c = model(snapshot, h, c)
+                    val_cost += loss_func(y_hat, snapshot.y)
+                val_cost /= time + 1
+                val_cost = val_cost.item()
+                val_losses.append(val_cost)
 
-            # EVALUATE MODEL - TEST
-            h, c = None, None
-            test_cost = 0
-            for time, snapshot in enumerate(test_dataset):
-                y_hat, h, c = model(snapshot, h, c)
-                test_cost += loss_func(y_hat, snapshot.y)
-            test_cost /= time + 1
-            test_cost = test_cost.item()
+                # EVALUATE MODEL - TEST
+                h, c = None, None
+                test_cost = 0
+                for time, snapshot in enumerate(test_dataset):
+                    h, c = None, None
+                    y_hat, h, c = model(snapshot, h, c)
+                    test_cost += loss_func(y_hat, snapshot.y)
+                test_cost /= time + 1
+                test_cost = test_cost.item()
 
             #Display losses for this epoch
-            print('Epoch: {:03d}, Train Loss: {:.5f}, Val Loss: {:.5f}, Test Loss: {:.5f}'.format(epoch,
+            print('Epoch: {:03d}, Loss: {:.5f}, Train Loss: {:5f}, Val Loss: {:.5f}, Test Loss: {:.5f}'.format(epoch,
                                                                                                                 train_cost,
+                                                                                                                train_eval_cost,
                                                                                                                 val_cost,
                                                                                                                 test_cost))
 
         # Set labels and plot loss curves for validation
         x = np.arange(0, num_epochs)
-        lbls = ["dim 32", "dim 128"]
+        lbls = ['GConvLSTM', 'GConvGRU', 'DCRNN', 'GCLSTM', 'Our Model']
         label = lbls[i]
-        plt.title('dim Comparison on COVID')
+        plt.title('Model Comparison')
         plt.xlabel('Epoch')
         plt.ylabel('MASE Loss')
         plt.plot(x, val_losses, label=str(label))
@@ -338,7 +374,7 @@ def gnn_predictor_single():
 
     sample = len(dataset)
     # Choose a frame of the dataset to work with
-    sample *= 0.6
+    sample *= 0.7
     train_dataset = dataset[:int(0.8 * sample)]
     val_dataset = dataset[int(0.8 * sample):int(0.9 * sample)]
     test_dataset = dataset[int(0.9 * sample):int(sample)]
@@ -367,36 +403,41 @@ def gnn_predictor_single():
                                                                                    bias=bias)
 
     models = [
-        RNN(module=WSC, gnn=WSC, rnn=LSTM, dim=16, gnn_2=WSC, rnn_depth=1),
-        RNN(module=WSC, gnn=WSC, rnn=GRU, dim=16, gnn_2=WSC, rnn_depth=1),
-        RNN(module=WSC, gnn=WSC, rnn=LSTM, dim=16, gnn_2=WSC, rnn_depth=3),
-        RNN(module=WSC, gnn=WSC, rnn=GRU, dim=16, gnn_2=WSC, rnn_depth=3),
-        RNN(module=WSC, gnn=WSC, rnn=LSTM, dim=16, gnn_2=WSC, rnn_depth=5),
-        RNN(module=WSC, gnn=WSC, rnn=GRU, dim=16, gnn_2=WSC, rnn_depth=5),
+        RNN(module=SAGEConv, gnn=SAGEConv, rnn=LSTM, dim=16, gnn_2=SAGEConv, rnn_depth=1),
     ]
 
-    train_losseses, val_losseses, test_losseses = [], [], []
+    train_losseses, train_eval_losseses, val_losseses, test_losseses = [], [], [], []
     for i in range(len(models)):
 
         model = models[i]
         print(model)
 
-        def forward(snapshot, h, c, detach=False):
-            if type(model) is GConvLSTM or type(model) is GConvGRU:
-                h, c = model(snapshot.x, snapshot.edge_index, snapshot.edge_attr[:, 0], h, c)
-                if detach:
-                    h = h.detach()
-                    c = c.detach()
-                return h, h, c
+        for p in model.parameters():
+            # p.data.fill_(100)
+            pass
+
+        def forward(snapshot, h, c):
+            if h is None:
+                out = model(snapshot, h, c)
             else:
-                return model(snapshot, h, c)
+                out = model(snapshot, h.detach(), c.detach())
+            if len(out) == 3:
+                x, h, c = out
+                h = h.detach()
+                c = c.detach()
+                return x, h, c
+            else:
+                x, h = out
+                h = h.detach()
+                return x, h
 
         optimizer = torch.optim.Adam(model.parameters(), lr=0.05)
 
-        num_epochs = 20
-        train_losses, val_losses, test_losses = [], [], []
+        num_epochs = 50
+        train_losses, train_eval_losses, val_losses, test_losses = [], [], [], []
 
         for epoch in range(num_epochs):
+            h, c = None, None
 
             predictions, labels = [], []
 
@@ -420,13 +461,28 @@ def gnn_predictor_single():
             with torch.no_grad():
                 model.eval()
 
+                # EVALUATE MODEL - TRAINING
+                train_eval_cost = 0
+                for time, snapshot in enumerate(train_dataset):
+                    h, c = None, None
+                    for sub_time in range(len(lookback_pattern)):
+                        sub_snapshot = Data(x=snapshot.x[:, sub_time:sub_time + 1], edge_index=snapshot.edge_index,
+                                            edge_attr=snapshot.edge_attr)
+                        y_hat, h, c = forward(sub_snapshot, h, c)
+                    predictions.append(y_hat)
+                    labels.append(snapshot.y)
+                    train_eval_cost += loss_func(y_hat, snapshot.y)
+                train_eval_cost /= time + 1
+                train_eval_cost = train_eval_cost.item()
+                train_eval_losses.append(train_eval_cost)
+
                 # EVALUATE MODEL - VALIDATION
                 val_cost = 0
                 for time, snapshot in enumerate(val_dataset):
                     h, c = None, None
                     for sub_time in range(len(lookback_pattern)):
                         sub_snapshot = Data(x=snapshot.x[:, sub_time:sub_time+1], edge_index=snapshot.edge_index, edge_attr=snapshot.edge_attr)
-                        y_hat, h, c = forward(sub_snapshot, h, c, detach=True)
+                        y_hat, h, c = forward(sub_snapshot, h, c)
                     predictions.append(y_hat)
                     labels.append(snapshot.y)
                     val_cost += loss_func(y_hat, snapshot.y)
@@ -440,7 +496,7 @@ def gnn_predictor_single():
                     h, c = None, None
                     for sub_time in range(len(lookback_pattern)):
                         sub_snapshot = Data(x=snapshot.x[:, sub_time:sub_time+1], edge_index=snapshot.edge_index, edge_attr=snapshot.edge_attr)
-                        y_hat, h, c = forward(sub_snapshot, h, c, detach=True)
+                        y_hat, h, c = forward(sub_snapshot, h, c)
                     predictions.append(y_hat)
                     labels.append(snapshot.y)
                     test_cost += loss_func(y_hat, snapshot.y)
@@ -449,34 +505,36 @@ def gnn_predictor_single():
                 test_losses.append(test_cost)
 
             # Display losses for this epoch
-            print('Epoch: {:03d}, Train Loss: {:.5f}, Val Loss: {:.5f}, Test Loss: {:.5f}'.format(epoch,
-                                                                                                      train_cost,
+            print('Epoch: {:03d}, Train Loss: {:.5f}, Train Eval Loss: {:.5f}, Val Loss: {:.5f}, Test Loss: {:.5f}'.format(epoch,
+                                                                                                      train_cost, train_eval_cost,
                                                                                                       val_cost,
                                                                                                       test_cost))
             if 1 == 0:
                 show_predictions(predictions, labels)
 
         train_losseses.append(train_losses)
+        train_eval_losseses.append(train_eval_losses)
         val_losseses.append(val_losses)
         test_losseses.append(test_losses)
 
     # Set labels and plot loss curves for validation
     x = np.arange(0, num_epochs)
-    lbls = ['LSTMx1', 'GRUx1', 'LSTMx3', 'GRUx3', 'LSTMx5', 'GRUx5']
-    plt.title('RNNs and Depth')
+    lbls = ['GConvLSTM', 'GConvGRU', 'DCRNN', 'GCLSTM', 'Our Model']
+    plt.title('Model Comparison')
     plt.xlabel('Epoch')
     plt.ylabel('MASE Loss')
     for i in range(len(models)):
         label = lbls[i]
         # plt.plot(x, train_losseses[i], label=str(label) + " (train)")
+        # plt.plot(x, train_eval_losseses[i], label=str(label) + " (train eval)")
         plt.plot(x, val_losseses[i], label=str(label) + " (val)")
         # plt.plot(x, test_losseses[i], label=str(label) + " (test)")
     plt.legend()
     plt.show()
 
-    # show_predictions(predictions, labels)
+    show_predictions(predictions, labels)
     # show_loss_by_country(predictions, labels, nations)
-    # show_labels_by_country(labels, nations)
+    show_labels_by_country(labels, nations)
 
 if __name__ == '__main__':
     #Get country centroids data
@@ -499,28 +557,28 @@ if __name__ == '__main__':
     nations = np.delete(nations, [len(nations)-1, len(nations)-2]) #Remove World and International
 
     # Commented unless remaking dataset
-    # dates = df.date.unique()
-    # new_data = {'Time': range(len(dates))}
-    # for i in range(len(nations)):
-    #     nation = nations[i]
-    #     nation_data = df.loc[df.location == nation]
-    #     new_cases = []
-    #     last_value = 0.0
-    #     for date in dates:
-    #         date_row = nation_data.loc[nation_data.date == date]
-    #         if not date_row.empty:
-    #             new_cases.append(date_row.new_cases.iloc[0])
-    #             last_value = date_row.iloc[0].new_cases
-    #         else:
-    #             new_cases.append(last_value)
-    #     new_data[nation + '_new_cases'] = new_cases
-    # df = pd.DataFrame(data=new_data)
-    #
-    # print('Dataset preprocessed')
-    # df.to_csv("df.csv")
-    # print(df.head())
-    # print(df.columns)
-    # print(df.shape)
+    dates = df.date.unique()
+    new_data = {'Time': range(len(dates))}
+    for i in range(len(nations)):
+        nation = nations[i]
+        nation_data = df.loc[df.location == nation]
+        new_cases = []
+        last_value = 0.0
+        for date in dates:
+            date_row = nation_data.loc[nation_data.date == date]
+            if not date_row.empty:
+                new_cases.append(date_row.new_cases.iloc[0])
+                last_value = date_row.iloc[0].new_cases
+            else:
+                new_cases.append(last_value)
+        new_data[nation + '_new_cases'] = new_cases
+    df = pd.DataFrame(data=new_data)
+
+    print('Dataset preprocessed')
+    df.to_csv("df.csv")
+    print(df.head())
+    print(df.columns)
+    print(df.shape)
 
     #Get centroid of each country
     country_centroids = {}
