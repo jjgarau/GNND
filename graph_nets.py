@@ -211,24 +211,17 @@ class RecurrentGraphNet(torch.nn.Module):
         dim: int - length of hidden embedding vectors
         filter_size: int - Chebyshev filter size
     """
-<<<<<<< HEAD
     def __init__(self, layer, lookback=1, output_size=1, dim=128, filter_size=1, rnn_depth=1, name=None):
-=======
-    def __init__(self, layer, lookback=1, output_size=1, dim=128, filter_size=1, rnn_depth=1):
->>>>>>> 2a8a690ed5b1c10139c198e6939a4579af3a2410
         super(RecurrentGraphNet, self).__init__()
 
         self.layer = layer
         self.rnn_depth = rnn_depth
         self.filter_size = filter_size
         self.recurrent = layer(lookback, dim, filter_size)
-<<<<<<< HEAD
         if name is None:
             self.name = layer.__name__
         else:
             self.name = name
-=======
->>>>>>> 2a8a690ed5b1c10139c198e6939a4579af3a2410
         if type(self.recurrent) is GConvLSTM or type(self.recurrent) is GCLSTM:
             self.has_c = True
         else:
@@ -264,10 +257,7 @@ class LagPredictor(torch.nn.Module):
     """
     def __init__(self):
         super(LagPredictor, self).__init__()
-<<<<<<< HEAD
         self.name = "Lag"
-=======
->>>>>>> 2a8a690ed5b1c10139c198e6939a4579af3a2410
 
     def forward(self, data, h=None, c=None):
         x, edge_index, edge_attr = data.x, data.edge_index, data.edge_attr
