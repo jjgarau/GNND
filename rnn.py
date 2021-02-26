@@ -5,8 +5,11 @@ from torch_geometric.nn.inits import glorot, zeros
 import torch.nn.functional as F
 from torch.nn import LSTMCell, GRUCell, RNNCell, LSTM as TorchLSTM
 from graph_nets import GraphLinear
-from torch_geometric.nn import global_mean_pool as gmp
+from torch_geometric.nn import global_mean_pool as gap
+from torch_geometric.nn import global_max_pool as gmp
 from torch_geometric.nn import ASAPooling, TopKPooling, EdgePooling, SAGPooling
+from torch_geometric_temporal.nn import DCRNN, GConvLSTM, GConvGRU
+from torch.nn.init import xavier_uniform
 
 #Recurrent Neural Network Modules
 
@@ -383,10 +386,12 @@ class RNN(torch.nn.Module):
         dim: int - number of features of embedding for each node
         module: torch.nn.Module - to be used in the LSTM to calculate each gate
     """
-    def __init__(self, node_features=1, output=1, dim=32, module=GraphLinear, rnn=LSTM, gnn=WeightedSAGEConv, gnn_2=WeightedSAGEConv, rnn_depth=1):
+    def __init__(self, node_features=1, output=1, dim=32, module=GraphLinear, rnn=LSTM, gnn=WeightedSAGEConv, gnn_2=WeightedSAGEConv, rnn_depth=1, name="RNN", edge_count=141):
         super(RNN, self).__init__()
         self.dim = dim
         self.rnn_depth = rnn_depth
+        self.name = name
+
 
         if gnn:
             self.gnn = gnn(node_features, dim)
@@ -402,9 +407,9 @@ class RNN(torch.nn.Module):
                 self.recurrent = None
         if gnn_2:
             if gnn:
-                self.gnn_2 = gnn_2(2 * dim, 2 * dim)
+                self.gnn_2 = gnn_2(dim * 2, dim * 2)
             else:
-                self.gnn_2 = gnn_2(dim + node_features, 2 * dim)
+                self.gnn_2 = gnn_2(dim + node_features, dim * 2)
         else:
             self.gnn_2 = None
 
@@ -431,6 +436,75 @@ class RNN(torch.nn.Module):
         if self.gnn_2:
             x = self.gnn_2(x, edge_index, edge_attr)
         x = self.lin1(x)
+        x = self.act1(x)
+        x = self.lin2(x)
+
+        return x, h, c
+
+
+
+class PGT_DCRNN(torch.nn.Module):
+    def __init__(self, node_features, dim=16):
+        super(PGT_DCRNN, self).__init__()
+        self.recurrent = DCRNN(node_features, dim, 1)
+        self.linear = torch.nn.Linear(dim, 1)
+
+    def forward(self, data, h=None, c=None):
+        x, edge_index, edge_attr = data.x, data.edge_index, data.edge_attr
+        h = self.recurrent(x, edge_index, edge_attr, h)
+        x = F.relu(h)
+        x = self.linear(x)
+        return x, h, None
+
+class PGT_GConvLSTM(torch.nn.Module):
+    def __init__(self, node_features, dim=16):
+        super(PGT_GConvLSTM, self).__init__()
+        self.recurrent = GConvLSTM(node_features, dim, 1)
+        self.linear = torch.nn.Linear(dim, 1)
+
+    def forward(self, data, h=None, c=None):
+        x, edge_index, edge_attr = data.x, data.edge_index, data.edge_attr
+        edge_attr = torch.FloatTensor([attr[0] for attr in edge_attr])
+        h, c = self.recurrent(x, edge_index, edge_attr, h)
+        x = F.relu(h)
+        x = self.linear(x)
+        return x, h, c
+
+class PGT_GConvGRU(torch.nn.Module):
+    def __init__(self, node_features, dim=16):
+        super(PGT_GConvGRU, self).__init__()
+        self.recurrent = GConvGRU(node_features, dim, 1)
+        self.linear = torch.nn.Linear(dim, 1)
+
+    def forward(self, data, h=None, c=None):
+        x, edge_index, edge_attr = data.x, data.edge_index, data.edge_attr
+        edge_attr = torch.FloatTensor([attr[0] for attr in edge_attr])
+        h = self.recurrent(x, edge_index, edge_attr, h)
+        x = F.relu(h)
+        x = self.linear(x)
+        return x, h, None
+
+
+class SimpleRNN(torch.nn.Module):
+
+    def __init__(self, node_features=1, output=1, dim=32, module=GraphLinear, rnn=LSTM, rnn_depth=1):
+        super(SimpleRNN, self).__init__()
+        self.dim = dim
+        self.rnn_depth = rnn_depth
+
+        self.recurrent = rnn(node_features, dim, module=module)
+
+        self.lin1 = torch.nn.Linear(dim, dim)
+        self.lin2 = torch.nn.Linear(dim, output)
+        self.act1 = torch.nn.ReLU()
+
+    def forward(self, data, h=None, c=None):
+        x, edge_index, edge_attr = data.x, data.edge_index, data.edge_attr
+
+        for i in range(self.rnn_depth):
+            h, c = self.recurrent(x, edge_index, edge_attr, h, c)
+
+        x = self.lin1(h)
         x = self.act1(x)
         x = self.lin2(x)
 

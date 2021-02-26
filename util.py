@@ -1,6 +1,8 @@
 import torch
 import numpy as np
 import matplotlib.pyplot as plt
+from torch_geometric.data import Data
+from torch_geometric_temporal.nn import *
 
 def mape_loss(output, label):
     return torch.mean(torch.abs(torch.div((output - label), label)))
@@ -15,7 +17,11 @@ def mae_loss(output, label):
     return torch.mean(torch.abs(output - label))
 
 def mase_loss(output, label):
-    return torch.mean(torch.abs(output - label)) / torch.mean(label)
+    label_mean = torch.mean(label)
+    if label_mean == 0:
+        return torch.mean(torch.abs(output - label))
+    else:
+        return torch.mean(torch.abs(output - label)) / label_mean
 
 def inv_reg_mase_loss(output, label):
     return mase_loss(output, label) + torch.mean(torch.div(1, output))
@@ -46,40 +52,74 @@ def evaluate_gnn(model, loader, device):
             pred = pred.reshape(label.shape)
             predictions.append(pred)
             labels.append(label)
-    predictions = np.vstack(predictions)
-    labels = np.vstack(labels)
-    return np.mean(np.abs(predictions - labels)) / np.mean(labels) #np.mean(abs((labels - predictions) / labels))  #reporting loss function, different from training
+    p = np.vstack(predictions)
+    l = np.vstack(labels)
+    return np.mean(np.abs(p - l)) / np.mean(l) #np.mean(abs((labels - predictions) / labels))  #reporting loss function, different from training
 
+
+def evaluate_gnn_recurrent(model, dataset, lookback_pattern, loss_func):
+    predictions, labels, losses = [], [], []
+
+    def forward(snapshot, h, c, detach=False):
+        if type(model) is GConvLSTM or type(model) is GConvGRU:
+            h, c = model(snapshot.x, snapshot.edge_index, snapshot.edge_attr[:, 0], h, c)
+            if detach:
+                h = h.detach()
+                c = c.detach()
+            return h, h, c
+        else:
+            return model(snapshot, h, c)
+
+    model.eval()
+    with torch.no_grad():
+        cost = 0
+        for time, snapshot in enumerate(dataset):
+            h, c = None, None
+            for sub_time in range(len(lookback_pattern)):
+                sub_snapshot = Data(x=snapshot.x[:, sub_time:sub_time + 1], edge_index=snapshot.edge_index,
+                                    edge_attr=snapshot.edge_attr)
+                y_hat, h, c = forward(sub_snapshot, h, c, detach=True)
+            predictions.append(y_hat)
+            labels.append(snapshot.y)
+            cost += loss_func(y_hat, snapshot.y)
+        cost /= time + 1
+        cost = cost.item()
+        losses.append(cost)
+    return predictions, labels, losses
 
 def show_predictions(predictions, labels):
     # Plot predictions and labels over time
     x = np.arange(0, len(predictions))
-    plt.title('Predictions')
-    plt.xlabel("Time")
-    plt.ylabel("Prediction")
+    plt.title('COVID Europe Dataset')
+    plt.xlabel("Time (days)")
+    plt.ylabel("New Cases")
     plt.plot(x, [torch.mean(p) for p in predictions], label="Predictions")
     plt.plot(x, [torch.mean(l) for l in labels], label="Labels")
-    plt.plot(x, [1000*mase_loss(predictions[i], labels[i]) for i in range(len(predictions))], label="Loss")
+    # plt.plot(x, [1000*mase_loss(predictions[i], labels[i]) for i in range(len(predictions))], label="Loss")
     plt.legend()
     plt.show()
 
-def show_loss_by_country(predictions, labels, nations):
+def show_loss_by_country(predictions, labels, nations, plot=True):
     # Plot loss by country over time
     x = np.arange(0, len(predictions))
     plt.title('Loss by Country')
-    plt.xlabel("Time")
-    plt.ylabel("MAE Loss")
+    plt.xlabel("Time (days)")
+    plt.ylabel("MASE Loss")
+    losses = {}
     for i in range(len(nations)):
-        loss = [mae_loss(predictions[time][i], labels[time][i]) for time in range(len(predictions))]
-        plt.plot(x, loss, label=nations[i])
-        print(nations[i] + ": " + str(int(sum(loss)/len(loss))))
-    plt.show()
+        loss = [float(mae_loss(predictions[time][i], labels[time][i])) for time in range(len(predictions))]
+        losses[nations[i]] = loss
+        if plot:
+            plt.plot(x, loss, label=nations[i])
+    if plot:
+        plt.show()
+    return losses
 
 def show_labels_by_country(labels, nations):
     # Plot labels by country over time
     x = np.arange(0, len(labels))
-    plt.title('Labels by Country')
-    plt.xlabel("Time")
+    plt.title('New Cases by Country')
+    plt.xlabel("Time (days)")
     plt.ylabel("New COVID Cases")
     for i in range(len(nations)):
         label = [torch.mean(l[i]) for l in labels]

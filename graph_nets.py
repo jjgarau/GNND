@@ -3,6 +3,7 @@ from torch_geometric.nn import TopKPooling
 from torch_geometric.nn import global_mean_pool as gap, global_max_pool as gmp
 import torch.nn.functional as F
 from torch_geometric.utils import dropout_adj
+from torch_geometric_temporal.nn import GConvLSTM, GConvGRU, DCRNN, GCLSTM, LRGCN
 
 #Abstracted classes for Graph Neural Networks
 
@@ -189,7 +190,7 @@ class GraphNet(torch.nn.Module):
         x = torch.mul(F.pad(residual, (0, self.dim - self.lookback), value=0), self.res_factor) + F.relu(self.conv1(x, edge_index))
         x, edge_index, edge_attr, batch, _, _ = self.pool1(x, edge_index, edge_attr, batch)
         x1 = torch.cat([gmp(x, batch), gap(x, batch)], dim=1)
-        x = torch.mul(residual, self.res_factor) + F.relu(self.conv2(x, edge_index))
+        x = F.relu(self.conv2(x, edge_index))
         x, edge_index, edge_attr, batch, _, _ = self.pool2(x, edge_index, edge_attr, batch)
         x2 = torch.cat([gmp(x, batch), gap(x, batch)], dim=1)
         x = x1 + x2
@@ -210,24 +211,55 @@ class RecurrentGraphNet(torch.nn.Module):
         dim: int - length of hidden embedding vectors
         filter_size: int - Chebyshev filter size
     """
-    def __init__(self, layer, lookback, output_size, dim=64, filter_size=3):
+    def __init__(self, layer, lookback=1, output_size=1, dim=128, filter_size=1, rnn_depth=1, name=None):
         super(RecurrentGraphNet, self).__init__()
 
         self.layer = layer
+        self.rnn_depth = rnn_depth
         self.filter_size = filter_size
         self.recurrent = layer(lookback, dim, filter_size)
+        if name is None:
+            self.name = layer.__name__
+        else:
+            self.name = name
+        if type(self.recurrent) is GConvLSTM or type(self.recurrent) is GCLSTM:
+            self.has_c = True
+        else:
+            self.has_c = False
         self.lin1 = torch.nn.Linear(dim, dim)
         self.lin2 = torch.nn.Linear(dim, output_size)
         self.act1 = torch.nn.ReLU()
 
-    def forward(self, data):
+    def forward(self, data, h=None, c=None):
         x, edge_index, edge_attr = data.x, data.edge_index, data.edge_attr
-        x = self.recurrent(x, edge_index, edge_attr.reshape([edge_attr.shape[0]]))
-        if type(x) is tuple:
-            x = x[0] #[0] = hidden state, [1] = cell state
-        x = F.relu(x)
+        for i in range(self.rnn_depth):
+            if self.has_c:
+                h, c = self.recurrent(x, edge_index, edge_attr.reshape([edge_attr.shape[0]]), h, c)
+            else:
+                h = self.recurrent(x, edge_index, edge_attr.reshape([edge_attr.shape[0]]), h)
+        x = F.relu(h)
         x = self.lin1(x)
         x = self.act1(x)
         x = self.lin2(x)
 
-        return x
+        return x, h, c
+
+
+class LagPredictor(torch.nn.Module):
+    """GNNs from PyTorch Geometric Temporal -
+    This is the previous and incorrect implementation, kept for historical record.
+    Parameters:
+        layer: torch.nn.Module - type of GNN from torch_geometric_temporal.nn to use
+        lookback: int - number of input node features
+        output_size: int - number of nodes to predict
+        dim: int - length of hidden embedding vectors
+        filter_size: int - Chebyshev filter size
+    """
+    def __init__(self):
+        super(LagPredictor, self).__init__()
+        self.name = "Lag"
+
+    def forward(self, data, h=None, c=None):
+        x, edge_index, edge_attr = data.x, data.edge_index, data.edge_attr
+
+        return x[:, -1], h, c
