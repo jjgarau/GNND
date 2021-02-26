@@ -121,7 +121,7 @@ def show_labels_by_country(labels, nations):
     plt.title('New Cases by Country')
     plt.xlabel("Time (days)")
     plt.ylabel("New COVID Cases")
-    for i in range(len(nations)):
+    for i in range(5):
         label = [torch.mean(l[i]) for l in labels]
         plt.plot(x, label, label=nations[i])
         print(nations[i] + ": " + str(int(sum(label)/len(label))))

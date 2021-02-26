@@ -8,3 +8,4 @@ basemap-1.0.7/*
 country_centroids.csv
 yoochoose-data/*
 results/*
+collisions.csv

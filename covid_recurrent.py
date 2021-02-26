@@ -77,8 +77,11 @@ class COVIDDatasetSpaced(InMemoryDataset):
         node_mask = torch.ones(len(df)).bool()
         edge_mask = torch.ones(len(source_nodes)).bool()
 
+<<<<<<< HEAD
         edge_count = len(source_nodes)
 
+=======
+>>>>>>> 2a8a690ed5b1c10139c198e6939a4579af3a2410
         for i in tqdm(range(len(df) - lookback_pattern[0])):
             edge_mask = torch.logical_not(torch.logical_xor(edge_mask, torch.bernoulli(0.95 * torch.ones(len(source_nodes))).bool()))
             node_mask = torch.logical_not(torch.logical_xor(node_mask, torch.bernoulli(0.95 * torch.ones(len(df))).bool()))
@@ -86,9 +89,15 @@ class COVIDDatasetSpaced(InMemoryDataset):
             nodes_to_drop = set(torch.arange(len(df))[inv_node_mask].tolist())
 
             temp_edge_mask = edge_mask.clone()
+<<<<<<< HEAD
             for j in range(len(source_nodes)):
                 if source_nodes[j] in nodes_to_drop or target_nodes[j] in nodes_to_drop:
                     temp_edge_mask[j] = False
+=======
+            for i in range(len(source_nodes)):
+                if source_nodes[i] in nodes_to_drop or target_nodes[i] in nodes_to_drop:
+                    temp_edge_mask[i] = False
+>>>>>>> 2a8a690ed5b1c10139c198e6939a4579af3a2410
 
             # Node Features
             values_x = []
@@ -106,11 +115,18 @@ class COVIDDatasetSpaced(InMemoryDataset):
 
             # Edge Index
             edge_index = torch_def.LongTensor([source_nodes.copy(), target_nodes.copy()])
+<<<<<<< HEAD
             # edge_index = edge_index[:, temp_edge_mask]
             # Edge Weights
             edge_attr = torch_def.FloatTensor([[weight] for weight in edge_attrs])
             edge_attr = edge_attr / torch.mean(edge_attr)
             # edge_attr = edge_attr[temp_edge_mask, :]
+=======
+            edge_index = edge_index[:, temp_edge_mask]
+            # Edge Weights
+            edge_attr = torch_def.FloatTensor([[weight] for weight in edge_attrs])
+            edge_attr = edge_attr[temp_edge_mask, :]
+>>>>>>> 2a8a690ed5b1c10139c198e6939a4579af3a2410
 
 
             data = Data(x=x, edge_index=edge_index, y=y, edge_attr=edge_attr)
@@ -118,6 +134,128 @@ class COVIDDatasetSpaced(InMemoryDataset):
         data, slices = self.collate(data_list)
         torch.save((data, slices), self.processed_paths[0])
 
+<<<<<<< HEAD
+=======
+
+def gnn_predictor():
+
+    #Load and split dataset
+
+    dataset = COVIDDatasetSpaced(root='data/covid-data/')
+    dataset = dataset.shuffle()
+
+    sample = len(dataset)
+    # Optionally, make dataset smaller for quick testing
+    sample *= 0.7
+    train_dataset = dataset[:int(0.8 * sample)]
+    val_dataset = dataset[int(0.8 * sample):int(0.9 * sample)]
+    test_dataset = dataset[int(0.9 * sample):int(sample)]
+
+
+
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+    loss_func = mase_loss
+
+
+    # Design models for testing
+    output_gnns = [
+        lambda lookback, dim: graph_nets.GNNModule(WeightedSAGEConv, 1, lookback, dim=dim, res_factors=None, dropouts=[]),
+        lambda lookback, dim: graph_nets.GNNModule(WeightedSAGEConv, 3, lookback, dim=dim, res_factors=None, dropouts=[])
+    ]
+
+    linear_module = lambda in_channels, out_channels, bias: graph_nets.GraphLinear(in_channels, out_channels, bias=bias)
+
+    WSC = WeightedSAGEConv
+    models = [
+        RNN(module=WSC, gnn=WSC, rnn=LSTM, dim=16, gnn_2=WSC, rnn_depth=1, node_features=len(lookback_pattern)),
+        graph_nets.RecurrentGraphNet(GConvLSTM, lookback=len(lookback_pattern)),
+        graph_nets.RecurrentGraphNet(GConvGRU, lookback=len(lookback_pattern)),
+        graph_nets.RecurrentGraphNet(DCRNN, lookback=len(lookback_pattern)),
+        graph_nets.RecurrentGraphNet(GCLSTM, lookback=len(lookback_pattern)),
+    ]
+
+    for i in range(len(models)):
+
+        model = models[i]
+        print(model)
+
+
+        optimizer = torch.optim.Adam(model.parameters(), lr=0.05)
+
+
+        num_epochs = 40
+        val_losses = []
+        h, c = None, None
+        for epoch in range(num_epochs):
+            h, c = None, None
+            # TRAIN MODEL
+            model.train()
+            train_cost = 0
+            for time, snapshot in enumerate(train_dataset):
+                h, c = None, None
+                y_hat, h, c = model(snapshot, h, c)
+                train_cost += loss_func(y_hat, snapshot.y)
+            train_cost /=  time + 1
+            train_cost.backward()
+            optimizer.step()
+            optimizer.zero_grad()
+
+            with torch.no_grad():
+
+                # EVALUATE MODEL - TRAINING
+                h, c = None, None
+                model.eval()
+                train_eval_cost = 0
+                for time, snapshot in enumerate(train_dataset):
+                    h, c = None, None
+                    y_hat, h, c = model(snapshot, h, c)
+                    train_eval_cost += loss_func(y_hat, snapshot.y)
+                train_eval_cost /= time + 1
+                train_eval_cost = train_eval_cost.item()
+
+                # EVALUATE MODEL - VALIDATION
+                h, c = None, None
+                val_cost = 0
+                for time, snapshot in enumerate(val_dataset):
+                    h, c = None, None
+                    y_hat, h, c = model(snapshot, h, c)
+                    val_cost += loss_func(y_hat, snapshot.y)
+                val_cost /= time + 1
+                val_cost = val_cost.item()
+                val_losses.append(val_cost)
+
+                # EVALUATE MODEL - TEST
+                h, c = None, None
+                test_cost = 0
+                for time, snapshot in enumerate(test_dataset):
+                    h, c = None, None
+                    y_hat, h, c = model(snapshot, h, c)
+                    test_cost += loss_func(y_hat, snapshot.y)
+                test_cost /= time + 1
+                test_cost = test_cost.item()
+
+            #Display losses for this epoch
+            print('Epoch: {:03d}, Loss: {:.5f}, Train Loss: {:5f}, Val Loss: {:.5f}, Test Loss: {:.5f}'.format(epoch,
+                                                                                                                train_cost,
+                                                                                                                train_eval_cost,
+                                                                                                                val_cost,
+                                                                                                                test_cost))
+
+        # Set labels and plot loss curves for validation
+        x = np.arange(0, num_epochs)
+        lbls = ['GConvLSTM', 'GConvGRU', 'DCRNN', 'GCLSTM', 'Our Model']
+        label = lbls[i]
+        plt.title('Model Comparison')
+        plt.xlabel('Epoch')
+        plt.ylabel('MASE Loss')
+        plt.plot(x, val_losses, label=str(label))
+
+
+    plt.legend()
+    plt.show()
+
+>>>>>>> 2a8a690ed5b1c10139c198e6939a4579af3a2410
 def gnn_predictor_single():
     # Load and split dataset
     dataset = COVIDDatasetSpaced(root='data/covid-data/')
@@ -125,7 +263,11 @@ def gnn_predictor_single():
 
     sample = len(dataset)
     # Choose a frame of the dataset to work with
+<<<<<<< HEAD
     sample *= 1.0
+=======
+    sample *= 0.7
+>>>>>>> 2a8a690ed5b1c10139c198e6939a4579af3a2410
     train_dataset = dataset[:int(0.8 * sample)]
     val_dataset = dataset[int(0.8 * sample):int(0.9 * sample)]
     test_dataset = dataset[int(0.9 * sample):int(sample)]
@@ -143,6 +285,7 @@ def gnn_predictor_single():
     experiment_descr = "Trying to fix the lag data by using MAE loss rather than MASE Loss for training."
     print(experiment_descr)
     models = [
+<<<<<<< HEAD
         graph_nets.LagPredictor(),
         RNN(module=WSC, gnn=WSC, rnn=LSTM, dim=16, gnn_2=WSC, rnn_depth=1, name="Our Model", edge_count=edge_count),
         # graph_nets.RecurrentGraphNet(GConvLSTM),
@@ -155,6 +298,11 @@ def gnn_predictor_single():
         "Description": experiment_descr,
         "Models": {},
     }
+=======
+        RNN(module=SAGEConv, gnn=SAGEConv, rnn=LSTM, dim=16, gnn_2=SAGEConv, rnn_depth=1),
+    ]
+
+>>>>>>> 2a8a690ed5b1c10139c198e6939a4579af3a2410
     train_losseses, train_eval_losseses, val_losseses, test_losseses = [], [], [], []
     for i in range(len(models)):
 
@@ -170,6 +318,7 @@ def gnn_predictor_single():
             if model.name == 'Lag':
                 return model(snapshot, h, c)
 
+<<<<<<< HEAD
             if h is None:
                 out = model(snapshot, h, c)
             elif c is None:
@@ -181,6 +330,23 @@ def gnn_predictor_single():
                 h = h.detach()
                 return x, h, c
             else:
+=======
+        for p in model.parameters():
+            # p.data.fill_(100)
+            pass
+
+        def forward(snapshot, h, c):
+            if h is None:
+                out = model(snapshot, h, c)
+            else:
+                out = model(snapshot, h.detach(), c.detach())
+            if len(out) == 3:
+                x, h, c = out
+                h = h.detach()
+                c = c.detach()
+                return x, h, c
+            else:
+>>>>>>> 2a8a690ed5b1c10139c198e6939a4579af3a2410
                 x, h = out
                 h = h.detach()
                 return x, h
@@ -188,7 +354,11 @@ def gnn_predictor_single():
         if model.name != "Lag":
             optimizer = torch.optim.Adam(model.parameters(), lr=0.05)
 
+<<<<<<< HEAD
         num_epochs = 10
+=======
+        num_epochs = 50
+>>>>>>> 2a8a690ed5b1c10139c198e6939a4579af3a2410
         train_losses, train_eval_losses, val_losses, test_losses = [], [], [], []
 
         for epoch in range(num_epochs):
@@ -262,12 +432,15 @@ def gnn_predictor_single():
                 test_losses.append(test_cost)
 
             # Display losses for this epoch
+<<<<<<< HEAD
             results["Models"][model.name]["Loss by Epoch"].append({
                 "Train": float(train_cost),
                 "Train Evaluation": float(train_eval_cost),
                 "Validation": float(val_cost),
                 "Test": float(test_cost)
             })
+=======
+>>>>>>> 2a8a690ed5b1c10139c198e6939a4579af3a2410
             print('Epoch: {:03d}, Train Loss: {:.5f}, Train Eval Loss: {:.5f}, Val Loss: {:.5f}, Test Loss: {:.5f}'.format(epoch,
                                                                                                       train_cost, train_eval_cost,
                                                                                                       val_cost,
@@ -287,6 +460,10 @@ def gnn_predictor_single():
 
     # Set labels and plot loss curves for validation
     x = np.arange(0, num_epochs)
+<<<<<<< HEAD
+=======
+    lbls = ['GConvLSTM', 'GConvGRU', 'DCRNN', 'GCLSTM', 'Our Model']
+>>>>>>> 2a8a690ed5b1c10139c198e6939a4579af3a2410
     plt.title('Model Comparison')
     plt.xlabel('Epoch')
     plt.ylabel('MASE Loss')
@@ -299,10 +476,16 @@ def gnn_predictor_single():
     plt.legend()
     plt.show()
 
+<<<<<<< HEAD
     #Save results into a .json file
     date = datetime.datetime.now().isoformat().split(".")[0]
     with open(f'results/results{date}.json', 'w') as f:
         json.dump(results, f, indent=4)
+=======
+    show_predictions(predictions, labels)
+    # show_loss_by_country(predictions, labels, nations)
+    show_labels_by_country(labels, nations)
+>>>>>>> 2a8a690ed5b1c10139c198e6939a4579af3a2410
 
 if __name__ == '__main__':
     #Get country centroids data
@@ -324,6 +507,7 @@ if __name__ == '__main__':
     nations = df.location.unique()
     nations = np.delete(nations, [len(nations)-1, len(nations)-2]) #Remove World and International
 
+<<<<<<< HEAD
     # Only needed if remaking the dataset
     if not os.path.exists('data/covid-data/processed/covid_dataset_spaced.dataset'):
         dates = sorted(df.date.unique())
@@ -348,6 +532,31 @@ if __name__ == '__main__':
         print(df.head())
         print(df.columns)
         print(df.shape)
+=======
+    # Commented unless remaking dataset
+    dates = df.date.unique()
+    new_data = {'Time': range(len(dates))}
+    for i in range(len(nations)):
+        nation = nations[i]
+        nation_data = df.loc[df.location == nation]
+        new_cases = []
+        last_value = 0.0
+        for date in dates:
+            date_row = nation_data.loc[nation_data.date == date]
+            if not date_row.empty:
+                new_cases.append(date_row.new_cases.iloc[0])
+                last_value = date_row.iloc[0].new_cases
+            else:
+                new_cases.append(last_value)
+        new_data[nation + '_new_cases'] = new_cases
+    df = pd.DataFrame(data=new_data)
+
+    print('Dataset preprocessed')
+    df.to_csv("df.csv")
+    print(df.head())
+    print(df.columns)
+    print(df.shape)
+>>>>>>> 2a8a690ed5b1c10139c198e6939a4579af3a2410
 
     #Get centroid of each country
     country_centroids = {}

@@ -20,6 +20,7 @@ id_to_street = {}
 street_to_location = defaultdict(list)
 location_to_id = {}
 id_to_location = {}
+<<<<<<< HEAD
 street_to_road_nodes_id = {}
 lookback_pattern = [12, 11, 10, 9, 8]
 edge_count = 7588
@@ -171,6 +172,27 @@ class RoadNodesDataset(InMemoryDataset):
         data, slices = self.collate(data_list)
         torch.save((data, slices), self.processed_paths[0])
 
+=======
+lookback_pattern = [12, 11, 10, 9, 8]
+
+def draw_map(m, scale=0.2):
+    """Utility function to draw map on top of matplotlib pyplot"""
+    # draw a shaded-relief image
+    m.shadedrelief(scale=scale)
+
+    # lats and longs are returned as a dictionary
+    lats = m.drawparallels(np.linspace(-90, 90, 13))
+    lons = m.drawmeridians(np.linspace(-180, 180, 13))
+
+    # keys contain the plt.Line2D instances
+    lat_lines = itertools.chain(*(tup[1][0] for tup in lats.items()))
+    lon_lines = itertools.chain(*(tup[1][0] for tup in lons.items()))
+    all_lines = itertools.chain(lat_lines, lon_lines)
+
+    # cycle through these lines and set the desired style
+    for line in all_lines:
+        line.set(linestyle='-', alpha=0.3, color='w')
+>>>>>>> 2a8a690ed5b1c10139c198e6939a4579af3a2410
 
 class CollisionDataset(InMemoryDataset):
     def __init__(self, root, transform=None, pre_transform=None, should_visualize_data=False, num_nodes=None):
@@ -225,8 +247,11 @@ class CollisionDataset(InMemoryDataset):
         torch_def = torch.cuda if torch.cuda.is_available() else torch
         data_list = []
 
+<<<<<<< HEAD
         edge_count = len(source_nodes)
 
+=======
+>>>>>>> 2a8a690ed5b1c10139c198e6939a4579af3a2410
         print("Processing CollisionDataset...")
         for i in tqdm(range(len(df) - lookback_pattern[0])):
 
@@ -275,7 +300,10 @@ class LargeCollisionDataset(CollisionDataset):
     def process(self):
         super(LargeCollisionDataset, self).process()
 
+<<<<<<< HEAD
 
+=======
+>>>>>>> 2a8a690ed5b1c10139c198e6939a4579af3a2410
 class SmallCollisionDataset(CollisionDataset):
     def __init__(self, root, transform=None, pre_transform=None, should_visualize_data=False):
         super(SmallCollisionDataset, self).__init__(root, transform, pre_transform, should_visualize_data=should_visualize_data, num_nodes=500)
@@ -292,7 +320,11 @@ class SmallCollisionDataset(CollisionDataset):
         super(SmallCollisionDataset, self).process()
 
 
+<<<<<<< HEAD
 def gnn_predictor(should_train=True, models=None, dataset=None, num_epochs=15):
+=======
+def gnn_predictor(should_train=True, models=None, dataset=None):
+>>>>>>> 2a8a690ed5b1c10139c198e6939a4579af3a2410
     # Load and split dataset
     if not dataset:
         dataset = SmallCollisionDataset(root='data/collision-data/')
@@ -300,7 +332,11 @@ def gnn_predictor(should_train=True, models=None, dataset=None, num_epochs=15):
 
     sample = len(dataset)
     # Choose a frame of the dataset to work with
+<<<<<<< HEAD
     sample *= 1.0
+=======
+    sample *= 0.7
+>>>>>>> 2a8a690ed5b1c10139c198e6939a4579af3a2410
     train_dataset = dataset[:int(0.8 * sample)]
     val_dataset = dataset[int(0.8 * sample):int(0.9 * sample)]
     test_dataset = dataset[int(0.9 * sample):int(sample)]
@@ -316,7 +352,11 @@ def gnn_predictor(should_train=True, models=None, dataset=None, num_epochs=15):
 
     if models is None:
         models = [
+<<<<<<< HEAD
             RNN(module=WSC, gnn=WSC, rnn=LSTM, dim=64, gnn_2=WSC, rnn_depth=1),
+=======
+            RNN(module=USC, gnn=USC, rnn=LSTM, dim=8, gnn_2=USC, rnn_depth=1),
+>>>>>>> 2a8a690ed5b1c10139c198e6939a4579af3a2410
         ]
 
     train_losseses, train_eval_losseses, val_losseses, test_losseses = [], [], [], []
@@ -342,6 +382,10 @@ def gnn_predictor(should_train=True, models=None, dataset=None, num_epochs=15):
 
         optimizer = torch.optim.Adam(model.parameters(), lr=0.05)
 
+<<<<<<< HEAD
+=======
+        num_epochs = 15
+>>>>>>> 2a8a690ed5b1c10139c198e6939a4579af3a2410
         train_losses, train_eval_losses, val_losses, test_losses = [], [], [], []
 
         for epoch in range(num_epochs):
@@ -349,10 +393,17 @@ def gnn_predictor(should_train=True, models=None, dataset=None, num_epochs=15):
 
             predictions, labels = [], []
 
+<<<<<<< HEAD
             train_cost = 0
             if should_train:
                 # TRAIN MODEL
                 model.train()
+=======
+            if should_train:
+                # TRAIN MODEL
+                model.train()
+                train_cost = 0
+>>>>>>> 2a8a690ed5b1c10139c198e6939a4579af3a2410
                 for time, snapshot in enumerate(train_dataset):
                     h, c = None, None
                     for sub_time in range(len(lookback_pattern)):
@@ -451,7 +502,11 @@ def gnn_predictor(should_train=True, models=None, dataset=None, num_epochs=15):
     return models
 
 
+<<<<<<< HEAD
 def process_df(no_save=False, num_nodes=None, borough=None, for_dataset="CollisionDataset"):
+=======
+def process_df(no_save=False, num_nodes=None, borough=None):
+>>>>>>> 2a8a690ed5b1c10139c198e6939a4579af3a2410
     df = pd.read_csv('collisions.csv')
     columns = ['CRASH DATE', 'CRASH TIME', 'BOROUGH', 'LOCATION', 'ON STREET NAME', 'CROSS STREET NAME']
     df = df.filter(columns)
@@ -504,6 +559,7 @@ def process_df(no_save=False, num_nodes=None, borough=None, for_dataset="Collisi
     boroughs = df.BOROUGH.unique()
     for borough in boroughs:
         df_borough = df[df.BOROUGH == borough]
+<<<<<<< HEAD
 
         if for_dataset == "normal":
             df_borough = df_borough.groupby([pd.Grouper(freq='M'), 'LOCATION']).agg({'COUNT': 'count', 'ON STREET NAME': 'first', 'CROSS STREET NAME': 'first'})
@@ -637,6 +693,25 @@ def draw_map(m, scale=0.2):
 
 def visualize_dataset():
     dataset = SmallCollisionDataset(root='data/collision-data/', should_visualize_data=True)
+=======
+        df_borough = df_borough.groupby([pd.Grouper(freq='M'), 'LOCATION']).agg({'COUNT': 'count', 'ON STREET NAME': 'first', 'CROSS STREET NAME': 'first'})
+
+        df_borough = df_borough.reset_index()
+        new_data = []
+        for timestamp in tqdm(df_borough.TIMESTAMP.unique()):
+            row = np.zeros(len(df_borough))
+            for location in df_borough[df_borough.TIMESTAMP == timestamp].iterrows():
+                row[location[1].LOCATION] = location[1].COUNT
+
+            new_data.append(row)
+
+        df_borough = pd.DataFrame(new_data)
+        df_borough.to_csv(f"data/collision-data/{borough}_collisions.csv")
+
+
+def visualize_dataset():
+    dataset = CollisionDataset(root='data/collision-data/', should_visualize_data=True)
+>>>>>>> 2a8a690ed5b1c10139c198e6939a4579af3a2410
     source_nodes = dataset[0].edge_index[0].tolist()
     target_nodes = dataset[0].edge_index[1].tolist()
 
@@ -660,6 +735,12 @@ def visualize_dataset():
 
 
 if __name__ == '__main__':
+<<<<<<< HEAD
     process_df(num_nodes=500, borough="STATEN ISLAND", for_dataset="TGNDataset")
     # dataset = RoadNodesDynamicDataset(root='data/collision-data/')
     # models = gnn_predictor(dataset=dataset, num_epochs=10)
+=======
+    models = gnn_predictor()
+    large_dataset = LargeCollisionDataset(root='data/collision-data/')
+    gnn_predictor(models=models, dataset=large_dataset)
+>>>>>>> 2a8a690ed5b1c10139c198e6939a4579af3a2410
