@@ -80,7 +80,7 @@ class WeightedSAGEConv(MessagePassing):
         return out
 
     def message(self, x_i: Tensor, x_j: Tensor, edge_weight) -> Tensor:
-        # return x_i * edge_weight
+        return x_i * edge_weight
         if not self.weighted:
             return x_j
         out = self.lin_m(x_j - x_i)

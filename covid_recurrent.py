@@ -80,6 +80,7 @@ class COVIDDatasetSpaced(InMemoryDataset):
         edge_count = len(source_nodes)
 
         for i in tqdm(range(len(df) - lookback_pattern[0])):
+            # !Masking currently not being used!
             edge_mask = torch.logical_not(torch.logical_xor(edge_mask, torch.bernoulli(0.95 * torch.ones(len(source_nodes))).bool()))
             node_mask = torch.logical_not(torch.logical_xor(node_mask, torch.bernoulli(0.95 * torch.ones(len(df))).bool()))
             inv_node_mask = ~node_mask
@@ -119,29 +120,28 @@ class COVIDDatasetSpaced(InMemoryDataset):
         torch.save((data, slices), self.processed_paths[0])
 
 def gnn_predictor_single():
-    # Load and split dataset
+    # Load, shuffle, and split dataset
     dataset = COVIDDatasetSpaced(root='data/covid-data/')
-    # dataset = dataset.shuffle()
+    dataset = dataset.shuffle()
 
     sample = len(dataset)
-    # Choose a frame of the dataset to work with
-    sample *= 1.0
+    sample *= 1.0 # Optionally, choose a frame of the dataset to work with
     train_dataset = dataset[:int(0.8 * sample)]
     val_dataset = dataset[int(0.8 * sample):int(0.9 * sample)]
     test_dataset = dataset[int(0.9 * sample):int(sample)]
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
+    # Set loss function
     loss_func = mae_loss
 
+    # CONSTRUCT MODELS
     WSC = WeightedSAGEConv
     USC = lambda in_channels, out_channels, bias=True: WeightedSAGEConv(in_channels, out_channels, weighted=False)
     linear_module = lambda in_channels, out_channels, bias: graph_nets.GraphLinear(in_channels, out_channels, bias=bias)
     DeepUSC = lambda lookback, dim: graph_nets.GNNModule(USC, 3, lookback, dim=dim, res_factors=[1, 0, 1], dropouts=[1])
     DeepWSC = lambda lookback, dim: graph_nets.GNNModule(WSC, 3, lookback, dim=dim, res_factors=None, dropouts=[])
 
-    experiment_descr = "Trying to fix the lag data by using MAE loss rather than MASE Loss for training."
-    print(experiment_descr)
     models = [
         graph_nets.LagPredictor(),
         RNN(module=WSC, gnn=WSC, rnn=LSTM, dim=16, gnn_2=WSC, rnn_depth=1, name="Our Model", edge_count=edge_count),
@@ -151,15 +151,22 @@ def gnn_predictor_single():
         # graph_nets.RecurrentGraphNet(GCLSTM),
     ]
 
+    # Setup for results
+    experiment_descr = "Trying to fix the lag data by using MAE loss rather than MASE Loss for training."
+    print(experiment_descr)
     results = {
         "Description": experiment_descr,
         "Models": {},
     }
     train_losseses, train_eval_losseses, val_losseses, test_losseses = [], [], [], []
-    for i in range(len(models)):
 
+    # For each model...
+    for i in range(len(models)):
         model = models[i]
         print(model)
+
+        # Setup for results
+        train_losses, train_eval_losses, val_losses, test_losses = [], [], [], []
         results["Models"][model.name] = {
             "Architecture": str(model),
             "Loss by Epoch": [],
@@ -167,6 +174,9 @@ def gnn_predictor_single():
         }
 
         def forward(snapshot, h, c):
+            """
+            Deals with slight differences in forward calls between models
+            """
             if model.name == 'Lag':
                 return model(snapshot, h, c)
 
@@ -185,36 +195,47 @@ def gnn_predictor_single():
                 h = h.detach()
                 return x, h
 
+        # Lag model does not optimize
         if model.name != "Lag":
             optimizer = torch.optim.Adam(model.parameters(), lr=0.05)
 
+
+        # For each epoch...
         num_epochs = 10
-        train_losses, train_eval_losses, val_losses, test_losses = [], [], [], []
-
         for epoch in range(num_epochs):
-            h, c = None, None
 
+            # Setup for results
             predictions, labels = [], []
 
             # TRAIN MODEL
             model.train()
             train_cost = 0
+            # For each training example...
             for time, snapshot in enumerate(train_dataset):
+                # Reset cell and hidden states
                 h, c = None, None
+
+                # For each snapshot in the example lookback
                 for sub_time in range(len(lookback_pattern)):
+                    # Get output and new cell/hidden states for prediction on example
                     sub_snapshot = Data(x=snapshot.x[:, sub_time:sub_time+1], edge_index=snapshot.edge_index, edge_attr=snapshot.edge_attr)
                     y_hat, h, c = forward(sub_snapshot, h, c)
-                # predictions.append(y_hat)
-                # labels.append(snapshot.y)
-                train_cost += loss_func(y_hat, snapshot.y)
-            train_cost /= time + 1
-            train_losses.append(train_cost)
 
+                # Calculate the loss from the final prediction of the sequence
+                train_cost += loss_func(y_hat, snapshot.y)
+
+            #Take average of loss from all training examples
+            train_cost /= time + 1
+            train_losses.append(train_cost)  # Keep list of training loss from each epoch
+
+            # Backpropagate, unless lag model
             if model.name != "Lag":
                 train_cost.backward()
                 optimizer.step()
                 optimizer.zero_grad()
 
+
+            # Evaluate perforamance on train/val/test datasets
             with torch.no_grad():
                 model.eval()
 
@@ -226,6 +247,8 @@ def gnn_predictor_single():
                         sub_snapshot = Data(x=snapshot.x[:, sub_time:sub_time + 1], edge_index=snapshot.edge_index,
                                             edge_attr=snapshot.edge_attr)
                         y_hat, h, c = forward(sub_snapshot, h, c)
+
+                    # Keep a list of the predictions and labels across the entire epoch
                     predictions.append(y_hat)
                     labels.append(snapshot.y)
                     train_eval_cost += loss_func(y_hat, snapshot.y)
@@ -261,7 +284,7 @@ def gnn_predictor_single():
                 test_cost = test_cost.item()
                 test_losses.append(test_cost)
 
-            # Display losses for this epoch
+            # Save to results and display losses for this epoch
             results["Models"][model.name]["Loss by Epoch"].append({
                 "Train": float(train_cost),
                 "Train Evaluation": float(train_eval_cost),
@@ -272,12 +295,13 @@ def gnn_predictor_single():
                                                                                                       train_cost, train_eval_cost,
                                                                                                       val_cost,
                                                                                                       test_cost))
-
+        # Keep a list of losses from each epoch for every model
         train_losseses.append(train_losses)
         train_eval_losseses.append(train_eval_losses)
         val_losseses.append(val_losses)
         test_losseses.append(test_losses)
 
+        # Calculate and save loss per country to results. Optionally, visualize data
         # show_predictions(predictions, labels)
         results["Models"][model.name]['Loss by Country'] = show_loss_by_country(predictions, labels, nations, plot=False)
         # show_labels_by_country(labels, nations)
@@ -360,4 +384,5 @@ if __name__ == '__main__':
         else:
             print("Missing coordinates for country", nation)
 
+    # Make predictions:
     gnn_predictor_single()

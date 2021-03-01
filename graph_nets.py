@@ -246,14 +246,8 @@ class RecurrentGraphNet(torch.nn.Module):
 
 
 class LagPredictor(torch.nn.Module):
-    """GNNs from PyTorch Geometric Temporal -
-    This is the previous and incorrect implementation, kept for historical record.
-    Parameters:
-        layer: torch.nn.Module - type of GNN from torch_geometric_temporal.nn to use
-        lookback: int - number of input node features
-        output_size: int - number of nodes to predict
-        dim: int - length of hidden embedding vectors
-        filter_size: int - Chebyshev filter size
+    """
+    A dummy model that returns the last input in the input sequence
     """
     def __init__(self):
         super(LagPredictor, self).__init__()
@@ -262,4 +256,5 @@ class LagPredictor(torch.nn.Module):
     def forward(self, data, h=None, c=None):
         x, edge_index, edge_attr = data.x, data.edge_index, data.edge_attr
 
+        # -1 is usually equivalent to 0 because snapshots are passed in one at a time. However, if they were passed in by bulk, this would be necessary.
         return x[:, -1], h, c

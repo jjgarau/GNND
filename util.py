@@ -106,7 +106,9 @@ def show_loss_by_country(predictions, labels, nations, plot=True):
     plt.xlabel("Time (days)")
     plt.ylabel("MASE Loss")
     losses = {}
+
     for i in range(len(nations)):
+        # Compute MAE loss for each example
         loss = [float(mae_loss(predictions[time][i], labels[time][i])) for time in range(len(predictions))]
         losses[nations[i]] = loss
         if plot:

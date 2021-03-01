@@ -392,7 +392,7 @@ class RNN(torch.nn.Module):
         self.rnn_depth = rnn_depth
         self.name = name
 
-
+        # Ensure that matrix multiplication sizes match up based on whether GNNs and RNN are used
         if gnn:
             self.gnn = gnn(node_features, dim)
             if rnn:
@@ -418,23 +418,33 @@ class RNN(torch.nn.Module):
         self.act1 = torch.nn.ReLU()
 
     def forward(self, data, h=None, c=None):
+        # Get data from snapshot
         x, edge_index, edge_attr = data.x, data.edge_index, data.edge_attr
+
+        # First GNN Layer
         if self.gnn:
             x = self.gnn(x, edge_index, edge_attr)
             x = F.relu(x)
 
+        # Initialize hidden and cell states if None
         if h is None:
             h = torch.zeros(x.shape[0], self.dim)
         if c is None:
             c = torch.zeros(x.shape[0], self.dim)
 
+        # RNN Layer
         if self.recurrent:
             for i in range(self.rnn_depth):
                 h, c = self.recurrent(x, edge_index, edge_attr, h, c)
 
+        # Skip connection from first GNN
         x = torch.cat((x, h), 1)
+
+        # Second GNN Layer
         if self.gnn_2:
             x = self.gnn_2(x, edge_index, edge_attr)
+
+        # Readout and activation layers
         x = self.lin1(x)
         x = self.act1(x)
         x = self.lin2(x)
