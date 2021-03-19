@@ -11,12 +11,27 @@ from weight_sage import WeightedSAGEConv
 import matplotlib.pyplot as plt
 from geopy.distance import geodesic
 import bisect
+import argparse
+import sys
 import numpy as np
 from rnn import RNN, LSTM, GRU, VanillaRNN, PGT_DCRNN, PGT_GConvLSTM, PGT_GConvGRU, SimpleRNN
 from torch_geometric.nn import LEConv, SAGEConv
 from torch_geometric_temporal.nn import GConvGRU, GConvLSTM, GCLSTM, LRGCN
 from torch_geometric.nn import ASAPooling, TopKPooling, EdgePooling, SAGPooling
 from torchvision import transforms
+
+
+parser = argparse.ArgumentParser('Recurrent GNN COVID Prediction')
+parser.add_argument('--lookback', type=int, default=5, help='Lookback')
+parser.add_argument('-d', '--data', type=str, help='Dataset name (eg. wikipedia or reddit)',
+                    default='wikipedia')
+try:
+  args = parser.parse_args()
+except:
+  parser.print_help()
+  sys.exit(0)
+
+BATCH_SIZE = args.bs
 
 #Test Recurrent Neural Networks on COVID Dataset
 #There is a separate file because the training pattern is slightly different,
@@ -25,6 +40,8 @@ from torchvision import transforms
 lookback = 5
 lookback_pattern = [11, 10, 9, 8, 7]
 edge_count = 0
+#Calculate the mean number of new cases for each country for use in the MASE loss function
+country_means = []
 
 class COVIDDatasetSpaced(InMemoryDataset):
     def __init__(self, root, transform=None, pre_transform=None):
@@ -119,10 +136,10 @@ class COVIDDatasetSpaced(InMemoryDataset):
         data, slices = self.collate(data_list)
         torch.save((data, slices), self.processed_paths[0])
 
-def gnn_predictor_single():
+def gnn_predictor():
     # Load, shuffle, and split dataset
     dataset = COVIDDatasetSpaced(root='data/covid-data/')
-    dataset = dataset.shuffle()
+    # dataset = dataset.shuffle()
 
     sample = len(dataset)
     sample *= 1.0 # Optionally, choose a frame of the dataset to work with
@@ -133,7 +150,7 @@ def gnn_predictor_single():
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
     # Set loss function
-    loss_func = mae_loss
+    loss_func = mase_loss
 
     # CONSTRUCT MODELS
     WSC = WeightedSAGEConv
@@ -144,7 +161,7 @@ def gnn_predictor_single():
 
     models = [
         graph_nets.LagPredictor(),
-        RNN(module=WSC, gnn=WSC, rnn=LSTM, dim=16, gnn_2=WSC, rnn_depth=1, name="Our Model", edge_count=edge_count),
+        RNN(module=WSC, gnn=WSC, rnn=LSTM, dim=32, gnn_2=WSC, rnn_depth=1, name="Our Model", edge_count=edge_count),
         # graph_nets.RecurrentGraphNet(GConvLSTM),
         # graph_nets.RecurrentGraphNet(GConvGRU),
         # graph_nets.RecurrentGraphNet(DCRNN),
@@ -152,7 +169,7 @@ def gnn_predictor_single():
     ]
 
     # Setup for results
-    experiment_descr = "Trying to fix the lag data by using MAE loss rather than MASE Loss for training."
+    experiment_descr = "In reporting loss by country, predictions and labels are now split up by train/val/test"
     print(experiment_descr)
     results = {
         "Description": experiment_descr,
@@ -170,7 +187,7 @@ def gnn_predictor_single():
         results["Models"][model.name] = {
             "Architecture": str(model),
             "Loss by Epoch": [],
-            "Loss by Country": {}
+            "Loss by Country": {'train': {}, 'val': {}, 'test': {}}
         }
 
         def forward(snapshot, h, c):
@@ -183,16 +200,18 @@ def gnn_predictor_single():
             if h is None:
                 out = model(snapshot, h, c)
             elif c is None:
-                out = model(snapshot, h.detach(), c)
+                # out = model(snapshot, h.detach(), c)
+                out = model(snapshot, h, c)
             else:
-                out = model(snapshot, h.detach(), c.detach())
+                # out = model(snapshot, h.detach(), c.detach())
+                out = model(snapshot, h, c)
             if len(out) == 3:
                 x, h, c = out
-                h = h.detach()
+                # h = h.detach()
                 return x, h, c
             else:
                 x, h = out
-                h = h.detach()
+                # h = h.detach()
                 return x, h
 
         # Lag model does not optimize
@@ -201,11 +220,13 @@ def gnn_predictor_single():
 
 
         # For each epoch...
-        num_epochs = 10
+        num_epochs = 100
+
         for epoch in range(num_epochs):
 
             # Setup for results
-            predictions, labels = [], []
+            predictions = {'train': [], 'val': [], 'test': []}
+            labels = {'train': [], 'val': [], 'test': []}
 
             # TRAIN MODEL
             model.train()
@@ -222,7 +243,7 @@ def gnn_predictor_single():
                     y_hat, h, c = forward(sub_snapshot, h, c)
 
                 # Calculate the loss from the final prediction of the sequence
-                train_cost += loss_func(y_hat, snapshot.y)
+                train_cost += loss_func(y_hat, snapshot.y, mean=country_means)
 
             #Take average of loss from all training examples
             train_cost /= time + 1
@@ -244,14 +265,13 @@ def gnn_predictor_single():
                 for time, snapshot in enumerate(train_dataset):
                     h, c = None, None
                     for sub_time in range(len(lookback_pattern)):
-                        sub_snapshot = Data(x=snapshot.x[:, sub_time:sub_time + 1], edge_index=snapshot.edge_index,
-                                            edge_attr=snapshot.edge_attr)
+                        sub_snapshot = Data(x=snapshot.x[:, sub_time:sub_time + 1], edge_index=snapshot.edge_index, edge_attr=snapshot.edge_attr)
                         y_hat, h, c = forward(sub_snapshot, h, c)
 
                     # Keep a list of the predictions and labels across the entire epoch
-                    predictions.append(y_hat)
-                    labels.append(snapshot.y)
-                    train_eval_cost += loss_func(y_hat, snapshot.y)
+                    predictions['train'].append(y_hat)
+                    labels['train'].append(snapshot.y)
+                    train_eval_cost += loss_func(y_hat, snapshot.y, mean=country_means)
                 train_eval_cost /= time + 1
                 train_eval_cost = train_eval_cost.item()
                 train_eval_losses.append(train_eval_cost)
@@ -263,9 +283,9 @@ def gnn_predictor_single():
                     for sub_time in range(len(lookback_pattern)):
                         sub_snapshot = Data(x=snapshot.x[:, sub_time:sub_time+1], edge_index=snapshot.edge_index, edge_attr=snapshot.edge_attr)
                         y_hat, h, c = forward(sub_snapshot, h, c)
-                    predictions.append(y_hat)
-                    labels.append(snapshot.y)
-                    val_cost += loss_func(y_hat, snapshot.y)
+                    predictions['val'].append(y_hat)
+                    labels['val'].append(snapshot.y)
+                    val_cost += loss_func(y_hat, snapshot.y, mean=country_means)
                 val_cost /= time + 1
                 val_cost = val_cost.item()
                 val_losses.append(val_cost)
@@ -277,9 +297,9 @@ def gnn_predictor_single():
                     for sub_time in range(len(lookback_pattern)):
                         sub_snapshot = Data(x=snapshot.x[:, sub_time:sub_time+1], edge_index=snapshot.edge_index, edge_attr=snapshot.edge_attr)
                         y_hat, h, c = forward(sub_snapshot, h, c)
-                    predictions.append(y_hat)
-                    labels.append(snapshot.y)
-                    test_cost += loss_func(y_hat, snapshot.y)
+                    predictions['test'].append(y_hat)
+                    labels['test'].append(snapshot.y)
+                    test_cost += loss_func(y_hat, snapshot.y, mean=country_means)
                 test_cost /= time + 1
                 test_cost = test_cost.item()
                 test_losses.append(test_cost)
@@ -302,8 +322,10 @@ def gnn_predictor_single():
         test_losseses.append(test_losses)
 
         # Calculate and save loss per country to results. Optionally, visualize data
-        # show_predictions(predictions, labels)
-        results["Models"][model.name]['Loss by Country'] = show_loss_by_country(predictions, labels, nations, plot=False)
+        show_predictions(predictions, labels)
+        results["Models"][model.name]['Loss by Country']['train'] = show_loss_by_country(predictions['train'], labels['train'], nations, plot=False)
+        results["Models"][model.name]['Loss by Country']['val'] = show_loss_by_country(predictions['val'], labels['val'], nations, plot=False)
+        results["Models"][model.name]['Loss by Country']['test'] = show_loss_by_country(predictions['test'], labels['test'], nations, plot=False)
         # show_labels_by_country(labels, nations)
 
 
@@ -373,6 +395,15 @@ if __name__ == '__main__':
         print(df.columns)
         print(df.shape)
 
+        country_means = [0]*(df.shape[1]-1)
+        for i in range(df.shape[0]):
+            for j in range(1, df.shape[1]):
+                country_means[j-1] += df.iloc[i][j]
+        for i in range(len(country_means)):
+            country_means[i] = country_means[i] / df.shape[0]
+
+        country_means = torch.FloatTensor(country_means)
+
     #Get centroid of each country
     country_centroids = {}
     for nation in nations:
@@ -385,4 +416,4 @@ if __name__ == '__main__':
             print("Missing coordinates for country", nation)
 
     # Make predictions:
-    gnn_predictor_single()
+    gnn_predictor()

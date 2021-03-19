@@ -16,9 +16,12 @@ def rmse_loss(output, label):
 def mae_loss(output, label):
     return torch.mean(torch.abs(output - label))
 
-def mase_loss(output, label):
+def mase_loss(output, label, mean=None):
+    label = label[:, 0]
     label_mean = torch.mean(label)
-    if label_mean == 0:
+    if not mean is None:
+        return torch.mean(torch.abs(output - label) / mean)
+    elif label_mean == 0:
         return torch.mean(torch.abs(output - label))
     else:
         return torch.mean(torch.abs(output - label)) / label_mean
@@ -89,12 +92,12 @@ def evaluate_gnn_recurrent(model, dataset, lookback_pattern, loss_func):
 
 def show_predictions(predictions, labels):
     # Plot predictions and labels over time
-    x = np.arange(0, len(predictions))
+    x = np.arange(0, len(predictions['train']))
     plt.title('COVID Europe Dataset')
     plt.xlabel("Time (days)")
     plt.ylabel("New Cases")
-    plt.plot(x, [torch.mean(p) for p in predictions], label="Predictions")
-    plt.plot(x, [torch.mean(l) for l in labels], label="Labels")
+    plt.plot(x, [torch.mean(p) for p in predictions['train']], label="Predictions")
+    plt.plot(x, [torch.mean(l) for l in labels['train']], label="Labels")
     # plt.plot(x, [1000*mase_loss(predictions[i], labels[i]) for i in range(len(predictions))], label="Loss")
     plt.legend()
     plt.show()

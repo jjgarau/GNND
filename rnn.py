@@ -416,6 +416,7 @@ class RNN(torch.nn.Module):
         self.lin1 = torch.nn.Linear(2 * dim, dim)
         self.lin2 = torch.nn.Linear(dim, output)
         self.act1 = torch.nn.ReLU()
+        self.act2 = torch.nn.ReLU()
 
     def forward(self, data, h=None, c=None):
         # Get data from snapshot
@@ -446,8 +447,9 @@ class RNN(torch.nn.Module):
 
         # Readout and activation layers
         x = self.lin1(x)
-        x = self.act1(x)
+        # x = self.act1(x)
         x = self.lin2(x)
+        # x = self.act2(x)
 
         return x, h, c
 
