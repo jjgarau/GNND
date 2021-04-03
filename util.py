@@ -26,6 +26,73 @@ def mase_loss(output, label, mean=None):
     else:
         return torch.mean(torch.abs(output - label)) / label_mean
 
+
+def mase1_loss(output, label, mean=None):
+    # Extreme 1: all countries equal
+    # L_i = (x_i - y_i)^2 / y_i
+    # L = (L_1 + L_2 + … + L_N) / N
+    label = label[:, 0]
+    label_mean = torch.mean(label)
+    if not mean is None:
+        return torch.mean(torch.abs(output - label) / mean)
+    elif label_mean == 0:
+        return torch.mean(torch.abs(output - label))
+    else:
+        return torch.mean(torch.abs(output - label)) / label_mean
+
+def mase2_loss(output, label, mean=None):
+    # Extreme 2: all people equal
+    # X = (x_1 + x_2 + … + x_N)
+    # Y = (y_1 + y_2 + … + y_N)
+    # L = (X - Y)^2 / Y
+    label = label[:, 0]
+    X = torch.sum(output)
+    Y = torch.sum(label)
+    if not mean is None:
+        return torch.abs(X - Y) / torch.sum(mean)
+    elif Y == 0:
+        return torch.abs(X - Y)
+    else:
+        return torch.abs(X - Y) / Y
+
+def mase3_loss(output, label, populations, mean=None, k=500000):
+    # Middle point: consider a population threshold k
+    # x_k = sum(x_i) such that country i has less than k population
+    # y_k = sum(y_i) such that country i has less than k population
+    # L_i = (x_i - y_i)^2 / y_i   for countries i with more than k population
+    # L_k = (x_k - y_k)^2 / y_k
+    # L = L_k + sum(L_i)
+    label = label[:, 0]
+
+    if mean is None:
+        mean = torch.mean(label)
+    if sum(mean) == 0:
+        mean = 1
+
+    large_outputs = []
+    large_labels = []
+    large_means = []
+
+    small_outputs = []
+    small_labels = []
+    small_means = []
+    for i in range(len(populations)):
+        if populations[i] < k:
+            small_outputs.append(output[i])
+            small_labels.append(label[i])
+            small_means.append(mean[i])
+        else:
+            large_outputs.append(output[i])
+            large_labels.append(label[i])
+            large_means.append(mean[i])
+
+    x_k = sum(small_outputs)
+    y_k = sum(small_labels)
+    L_i = torch.abs(torch.FloatTensor(large_outputs) - torch.FloatTensor(large_labels)) / torch.FloatTensor(large_means)
+    L_k = abs(x_k - y_k) / sum(small_means)
+    return L_k + torch.sum(L_i)
+
+
 def inv_reg_mase_loss(output, label):
     return mase_loss(output, label) + torch.mean(torch.div(1, output))
 

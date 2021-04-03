@@ -19,6 +19,7 @@ from torch_geometric.nn import LEConv, SAGEConv
 from torch_geometric_temporal.nn import GConvGRU, GConvLSTM, GCLSTM, LRGCN
 from torch_geometric.nn import ASAPooling, TopKPooling, EdgePooling, SAGPooling
 from torchvision import transforms
+import countryinfo
 
 
 parser = argparse.ArgumentParser('Recurrent GNN COVID Prediction')
@@ -31,7 +32,7 @@ except:
   parser.print_help()
   sys.exit(0)
 
-BATCH_SIZE = args.bs
+# BATCH_SIZE = args.bs
 
 #Test Recurrent Neural Networks on COVID Dataset
 #There is a separate file because the training pattern is slightly different,
@@ -42,6 +43,7 @@ lookback_pattern = [11, 10, 9, 8, 7]
 edge_count = 0
 #Calculate the mean number of new cases for each country for use in the MASE loss function
 country_means = []
+country_populations = []
 
 class COVIDDatasetSpaced(InMemoryDataset):
     def __init__(self, root, transform=None, pre_transform=None):
@@ -150,7 +152,8 @@ def gnn_predictor():
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
     # Set loss function
-    loss_func = mase_loss
+    loss_func = mase2_loss
+    reporting_metric = mase1_loss
 
     # CONSTRUCT MODELS
     WSC = WeightedSAGEConv
@@ -176,6 +179,7 @@ def gnn_predictor():
         "Models": {},
     }
     train_losseses, train_eval_losseses, val_losseses, test_losseses = [], [], [], []
+    train_rmses, train_eval_rmses, val_rmses, test_rmses = [], [], [], []
 
     # For each model...
     for i in range(len(models)):
@@ -184,9 +188,11 @@ def gnn_predictor():
 
         # Setup for results
         train_losses, train_eval_losses, val_losses, test_losses = [], [], [], []
+        train_rms, train_eval_rms, val_rms, test_rms = [], [], [], []
         results["Models"][model.name] = {
             "Architecture": str(model),
             "Loss by Epoch": [],
+            "Reporting Metric by Epoch": [],
             "Loss by Country": {'train': {}, 'val': {}, 'test': {}}
         }
 
@@ -231,6 +237,7 @@ def gnn_predictor():
             # TRAIN MODEL
             model.train()
             train_cost = 0
+            train_rm = 0
             # For each training example...
             for time, snapshot in enumerate(train_dataset):
                 # Reset cell and hidden states
@@ -243,10 +250,13 @@ def gnn_predictor():
                     y_hat, h, c = forward(sub_snapshot, h, c)
 
                 # Calculate the loss from the final prediction of the sequence
+                train_rm += reporting_metric(y_hat, snapshot.y, mean=country_means)
                 train_cost += loss_func(y_hat, snapshot.y, mean=country_means)
 
             #Take average of loss from all training examples
+            train_rm /= time + 1
             train_cost /= time + 1
+            train_rms.append(train_rm)
             train_losses.append(train_cost)  # Keep list of training loss from each epoch
 
             # Backpropagate, unless lag model
@@ -262,6 +272,7 @@ def gnn_predictor():
 
                 # EVALUATE MODEL - TRAINING
                 train_eval_cost = 0
+                train_eval_rm = 0
                 for time, snapshot in enumerate(train_dataset):
                     h, c = None, None
                     for sub_time in range(len(lookback_pattern)):
@@ -271,13 +282,19 @@ def gnn_predictor():
                     # Keep a list of the predictions and labels across the entire epoch
                     predictions['train'].append(y_hat)
                     labels['train'].append(snapshot.y)
+
+                    train_eval_rm += reporting_metric(y_hat, snapshot.y, mean=country_means)
                     train_eval_cost += loss_func(y_hat, snapshot.y, mean=country_means)
+
+                train_eval_rm /= time + 1
                 train_eval_cost /= time + 1
                 train_eval_cost = train_eval_cost.item()
+                train_eval_rms.append(train_eval_rm)
                 train_eval_losses.append(train_eval_cost)
 
                 # EVALUATE MODEL - VALIDATION
                 val_cost = 0
+                val_rm = 0
                 for time, snapshot in enumerate(val_dataset):
                     h, c = None, None
                     for sub_time in range(len(lookback_pattern)):
@@ -285,13 +302,19 @@ def gnn_predictor():
                         y_hat, h, c = forward(sub_snapshot, h, c)
                     predictions['val'].append(y_hat)
                     labels['val'].append(snapshot.y)
+
+                    val_rm += reporting_metric(y_hat, snapshot.y, mean=country_means)
                     val_cost += loss_func(y_hat, snapshot.y, mean=country_means)
+
+                val_rm /= time + 1
                 val_cost /= time + 1
                 val_cost = val_cost.item()
+                val_rms.append(val_rm)
                 val_losses.append(val_cost)
 
                 # EVALUATE MODEL - TEST
                 test_cost = 0
+                test_rm = 0
                 for time, snapshot in enumerate(test_dataset):
                     h, c = None, None
                     for sub_time in range(len(lookback_pattern)):
@@ -299,9 +322,14 @@ def gnn_predictor():
                         y_hat, h, c = forward(sub_snapshot, h, c)
                     predictions['test'].append(y_hat)
                     labels['test'].append(snapshot.y)
+
+                    test_rm += reporting_metric(y_hat, snapshot.y, mean=country_means)
                     test_cost += loss_func(y_hat, snapshot.y, mean=country_means)
+
+                test_rm /= time + 1
                 test_cost /= time + 1
                 test_cost = test_cost.item()
+                test_rms.append(test_rm)
                 test_losses.append(test_cost)
 
             # Save to results and display losses for this epoch
@@ -311,15 +339,31 @@ def gnn_predictor():
                 "Validation": float(val_cost),
                 "Test": float(test_cost)
             })
+
+            results["Models"][model.name]["Reporting Metric by Epoch"].append({
+                "Train": float(train_rm),
+                "Train Evaluation": float(train_eval_rm),
+                "Validation": float(val_rm),
+                "Test": float(test_rm)
+            })
             print('Epoch: {:03d}, Train Loss: {:.5f}, Train Eval Loss: {:.5f}, Val Loss: {:.5f}, Test Loss: {:.5f}'.format(epoch,
-                                                                                                      train_cost, train_eval_cost,
+                                                                                                      float(train_cost), train_eval_cost,
                                                                                                       val_cost,
                                                                                                       test_cost))
+            print('Epoch: {:03d}, Train RM: {:.5f}, Train Eval RM: {:.5f}, Val RM: {:.5f}, Test RM: {:.5f}'.format(epoch,
+                                                                                                      float(train_rm), train_eval_rm,
+                                                                                                      val_rm,
+                                                                                                      test_rm))
         # Keep a list of losses from each epoch for every model
         train_losseses.append(train_losses)
         train_eval_losseses.append(train_eval_losses)
         val_losseses.append(val_losses)
         test_losseses.append(test_losses)
+
+        train_rmses.append(train_rms)
+        train_eval_rmses.append(train_eval_rms)
+        val_rmses.append(val_rms)
+        test_rmses.append(test_rms)
 
         # Calculate and save loss per country to results. Optionally, visualize data
         show_predictions(predictions, labels)
@@ -371,7 +415,7 @@ if __name__ == '__main__':
     nations = np.delete(nations, [len(nations)-1, len(nations)-2]) #Remove World and International
 
     # Only needed if remaking the dataset
-    if not os.path.exists('data/covid-data/processed/covid_dataset_spaced.dataset'):
+    if not os.path.exists('data/covid-data/processed/covid_dataset_spaced.dataset') or True:
         dates = sorted(df.date.unique())
         new_data = {'Time': range(len(dates))}
         for i in range(len(nations)):
@@ -414,6 +458,13 @@ if __name__ == '__main__':
             country_centroids[nation] = (lat, lon)
         else:
             print("Missing coordinates for country", nation)
+
+    # Get population of each country
+    for nation in nations:
+        try:
+            country_populations.append(countryinfo.CountryInfo(nation).population())
+        except KeyError:
+            country_populations.append(0)
 
     # Make predictions:
     gnn_predictor()
