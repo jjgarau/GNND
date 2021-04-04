@@ -364,7 +364,7 @@ if __name__ == '__main__':
 
 
 
-    FEATURES = ['new_cases']#, 'new_deaths']
+    FEATURES = ['new_cases', 'new_deaths']
 
     df = pd.read_csv('data/covid-data/covid-19-world-cases-deaths-testing.csv')
     columns = ['location', 'date'] + FEATURES
