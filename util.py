@@ -17,7 +17,7 @@ def mae_loss(output, label):
     return torch.mean(torch.abs(output - label))
 
 def mase_loss(output, label, mean=None):
-    label = label[:, 0]
+    mean = mean.reshape(output.shape)
     label_mean = torch.mean(label)
     if not mean is None:
         return torch.mean(torch.abs(output - label) / mean)

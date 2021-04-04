@@ -98,6 +98,8 @@ class COVIDDatasetSpaced(InMemoryDataset):
 
         edge_count = len(source_nodes)
 
+        # The shape of the dataframe is [2, 48, 335] where dimensions are [feature, nation, date]
+
         for i in tqdm(range(len(df) - lookback_pattern[0])):
             # !Masking currently not being used!
             edge_mask = torch.logical_not(torch.logical_xor(edge_mask, torch.bernoulli(0.95 * torch.ones(len(source_nodes))).bool()))
@@ -114,8 +116,8 @@ class COVIDDatasetSpaced(InMemoryDataset):
             values_x = []
             for n in lookback_pattern:
                 m = i + lookback_pattern[0] - n
-                values_x.append(df.iloc[m, 1:])
-            values_x = pd.DataFrame(values_x).to_numpy().T
+                values_x.append(np.asarray([np.asarray([d.iloc[m, j+1] for d in dfs], dtype='float64') for j in range(len(nations))], dtype='float64'))
+            values_x = np.asarray(values_x)
             x = torch_def.FloatTensor(values_x)
             # x = x[node_mask, :]
 
@@ -164,7 +166,7 @@ def gnn_predictor():
 
     models = [
         graph_nets.LagPredictor(),
-        RNN(module=WSC, gnn=WSC, rnn=LSTM, dim=32, gnn_2=WSC, rnn_depth=1, name="Our Model", edge_count=edge_count),
+        RNN(module=WSC, gnn=WSC, rnn=LSTM, dim=32, gnn_2=WSC, rnn_depth=1, name="Our Model", edge_count=edge_count, node_features=len(FEATURES)),
         # graph_nets.RecurrentGraphNet(GConvLSTM),
         # graph_nets.RecurrentGraphNet(GConvGRU),
         # graph_nets.RecurrentGraphNet(DCRNN),
@@ -226,7 +228,7 @@ def gnn_predictor():
 
 
         # For each epoch...
-        num_epochs = 100
+        num_epochs = 30
 
         for epoch in range(num_epochs):
 
@@ -246,7 +248,7 @@ def gnn_predictor():
                 # For each snapshot in the example lookback
                 for sub_time in range(len(lookback_pattern)):
                     # Get output and new cell/hidden states for prediction on example
-                    sub_snapshot = Data(x=snapshot.x[:, sub_time:sub_time+1], edge_index=snapshot.edge_index, edge_attr=snapshot.edge_attr)
+                    sub_snapshot = Data(x=snapshot.x[sub_time], edge_index=snapshot.edge_index, edge_attr=snapshot.edge_attr)
                     y_hat, h, c = forward(sub_snapshot, h, c)
 
                 # Calculate the loss from the final prediction of the sequence
@@ -276,7 +278,7 @@ def gnn_predictor():
                 for time, snapshot in enumerate(train_dataset):
                     h, c = None, None
                     for sub_time in range(len(lookback_pattern)):
-                        sub_snapshot = Data(x=snapshot.x[:, sub_time:sub_time + 1], edge_index=snapshot.edge_index, edge_attr=snapshot.edge_attr)
+                        sub_snapshot = Data(x=snapshot.x[sub_time], edge_index=snapshot.edge_index, edge_attr=snapshot.edge_attr)
                         y_hat, h, c = forward(sub_snapshot, h, c)
 
                     # Keep a list of the predictions and labels across the entire epoch
@@ -298,8 +300,9 @@ def gnn_predictor():
                 for time, snapshot in enumerate(val_dataset):
                     h, c = None, None
                     for sub_time in range(len(lookback_pattern)):
-                        sub_snapshot = Data(x=snapshot.x[:, sub_time:sub_time+1], edge_index=snapshot.edge_index, edge_attr=snapshot.edge_attr)
+                        sub_snapshot = Data(x=snapshot.x[sub_time], edge_index=snapshot.edge_index, edge_attr=snapshot.edge_attr)
                         y_hat, h, c = forward(sub_snapshot, h, c)
+
                     predictions['val'].append(y_hat)
                     labels['val'].append(snapshot.y)
 
@@ -318,8 +321,9 @@ def gnn_predictor():
                 for time, snapshot in enumerate(test_dataset):
                     h, c = None, None
                     for sub_time in range(len(lookback_pattern)):
-                        sub_snapshot = Data(x=snapshot.x[:, sub_time:sub_time+1], edge_index=snapshot.edge_index, edge_attr=snapshot.edge_attr)
+                        sub_snapshot = Data(x=snapshot.x[sub_time], edge_index=snapshot.edge_index, edge_attr=snapshot.edge_attr)
                         y_hat, h, c = forward(sub_snapshot, h, c)
+
                     predictions['test'].append(y_hat)
                     labels['test'].append(snapshot.y)
 
@@ -404,9 +408,10 @@ if __name__ == '__main__':
 
 
 
+    FEATURES = ['new_cases', 'new_deaths']
 
     df = pd.read_csv('data/covid-data/covid-19-world-cases-deaths-testing.csv')
-    columns = ['location', 'date', 'new_cases']
+    columns = ['location', 'date'] + FEATURES
     df = df.filter(columns)
     df = df.fillna(method="ffill").fillna(method="bfill").fillna(0)
 
@@ -417,24 +422,31 @@ if __name__ == '__main__':
     # Only needed if remaking the dataset
     if not os.path.exists('data/covid-data/processed/covid_dataset_spaced.dataset') or True:
         dates = sorted(df.date.unique())
-        new_data = {'Time': range(len(dates))}
-        for i in range(len(nations)):
+        new_data = [{'Time': range(len(dates))}] * len(FEATURES)
+
+        print("Pre-Processing Data")
+        for i in tqdm(range(len(nations))):
             nation = nations[i]
             nation_data = df.loc[df.location == nation]
-            new_cases = []
-            last_value = 0.0
+            new_features = [[] for i in range(len(FEATURES))]
+            last_values = [0.0] * len(FEATURES)
             for date in dates:
                 date_row = nation_data.loc[nation_data.date == date]
                 if not date_row.empty:
-                    new_cases.append(date_row.new_cases.iloc[0])
-                    last_value = date_row.iloc[0].new_cases
+                    for j in range(len(FEATURES)):
+                        new_features[j].append(date_row[FEATURES[j]].iloc[0])
+                        last_values[j] = date_row.iloc[0][FEATURES[j]]
                 else:
-                    new_cases.append(last_value)
-            new_data[nation + '_new_cases'] = new_cases
-        df = pd.DataFrame(data=new_data)
+                    for j in range(len(FEATURES)):
+                        new_features[j].append(last_values[j])
+            for j in range(len(FEATURES)):
+                new_data[j][nation] = new_features[j]
+
+        dfs = [pd.DataFrame(data=new_data[j]) for j in range(len(FEATURES))]
+        df = dfs[0]
 
         print('Dataset preprocessed')
-        df.to_csv("df.csv")
+        # df.to_csv("df.csv")
         print(df.head())
         print(df.columns)
         print(df.shape)
@@ -445,6 +457,8 @@ if __name__ == '__main__':
                 country_means[j-1] += df.iloc[i][j]
         for i in range(len(country_means)):
             country_means[i] = country_means[i] / df.shape[0]
+            if country_means[i] == 0:
+                country_means[i] = 0.01
 
         country_means = torch.FloatTensor(country_means)
 

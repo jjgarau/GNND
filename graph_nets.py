@@ -256,5 +256,4 @@ class LagPredictor(torch.nn.Module):
     def forward(self, data, h=None, c=None):
         x, edge_index, edge_attr = data.x, data.edge_index, data.edge_attr
 
-        # -1 is usually equivalent to 0 because snapshots are passed in one at a time. However, if they were passed in by bulk, this would be necessary.
-        return x[:, -1], h, c
+        return x[:, 0], h, c
