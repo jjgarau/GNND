@@ -6,6 +6,7 @@ from torch.nn import Linear, Parameter
 import torch.nn.functional as F
 from torch_sparse import SparseTensor, matmul
 from torch_geometric.nn.conv import MessagePassing
+from torch import matmul
 
 
 #This is where I will attempt to make SAGEConv take edge weights into account in its message passing.
@@ -52,6 +53,8 @@ class WeightedSAGEConv(MessagePassing):
         self.lin_m = Linear(in_channels[0], in_channels[0], bias=bias)
         self.lin_ew = Linear(1, 1, bias=bias)
 
+        self.lin_edge_feature_weighting = Linear(2, 1, bias=bias)
+
         self.edge_attr = Parameter(randn(edge_count, 1))
 
         self.reset_parameters()
@@ -80,7 +83,8 @@ class WeightedSAGEConv(MessagePassing):
         return out
 
     def message(self, x_i: Tensor, x_j: Tensor, edge_weight) -> Tensor:
-        return x_i * edge_weight
+        # reduced_weight = self.lin_edge_feature_weighting(edge_weight)
+        return x_i * self.lin_edge_feature_weighting(edge_weight)
         if not self.weighted:
             return x_j
         out = self.lin_m(x_j - x_i)
