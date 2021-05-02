@@ -9,8 +9,10 @@ from util import *
 import graph_nets
 from weight_sage import WeightedSAGEConv
 import matplotlib.pyplot as plt
+import folium
 from geopy.distance import geodesic
 import bisect
+from mpl_toolkits.basemap import Basemap
 import sys
 import numpy as np
 from rnn import RNN, LSTM, GRU, VanillaRNN, PGT_DCRNN, PGT_GConvLSTM, PGT_GConvGRU, SimpleRNN
@@ -31,6 +33,7 @@ params = Parameters()
 country_means = []
 country_populations = []
 
+
 class COVIDDatasetSpaced(InMemoryDataset):
     def __init__(self, root, transform=None, pre_transform=None):
         super(COVIDDatasetSpaced , self).__init__(root, transform, pre_transform)
@@ -48,6 +51,34 @@ class COVIDDatasetSpaced(InMemoryDataset):
         pass
 
     def process(self):
+
+        # Alternative mobility dataset: Facebook Social Connectedness Index
+        # mobility = pd.read_csv('data/covid-data/facebook_mobility.csv')
+        #
+        # def get_mobility_score(country1, country2):
+        #     DEFAULT = 50000
+        #
+        #     def get_country_code(country):
+        #         try:
+        #             return countryinfo.CountryInfo(nation).iso(2)
+        #         except KeyError:
+        #             return None
+        #
+        #     code1 = get_country_code(country1)
+        #     code2 = get_country_code(country2)
+        #     if code1 is None or code2 is None:
+        #         return DEFAULT
+        #
+        #     row = mobility.loc[mobility.user_loc == code1].loc[
+        #         mobility.fr_loc == code2]
+        #     if row.shape[0] == 0:
+        #         return DEFAULT  # The mobility dataset is missing one of the given countries
+        #     else:
+        #         sci = row.iloc[0].scaled_sci
+        #         if isnan(sci):
+        #             return DEFAULT
+        #         else:
+        #             return row.iloc[0].scaled_sci
 
         # Load mobility dataset
         mobility = pd.read_csv('data/covid-data/mobility_data.csv')
@@ -514,6 +545,7 @@ if __name__ == '__main__':
             lon = match.Longitude.values[0]
             lat = match.Latitude.values[0]
             country_centroids[nation] = (lat, lon)
+            # print(nation + ": https://www.google.com/maps/place/" + str(lat) + "," + str(lon))
         else:
             print("Missing coordinates for country", nation)
 

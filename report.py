@@ -5,6 +5,7 @@ from numpy import array as nparray
 import countryinfo
 import pandas as pd
 import datetime
+import folium
 
 def compare_models():
     """
@@ -71,6 +72,32 @@ def compare_models():
     df.columns = ["Model"] + columns
     df.to_csv("reports/Loss By Epoch Report - " + datetime.datetime.now().isoformat().split(".")[0] + ".csv")
 
+
+def draw_map(data):
+    url = (
+        "https://raw.githubusercontent.com/python-visualization/folium/master/examples/data"
+    )
+    state_geo = 'europe.json'
+    state_unemployment = f"{url}/US_Unemployment_Oct2012.csv"
+
+    m = folium.Map(location=[48, -102], zoom_start=3, tiles='https://api.mapbox.com/styles/v1/sestinj/cko1roam616pw18pgzg1kv1yh/tiles/256/{z}/{x}/{y}@2x?access_token=pk.eyJ1Ijoic2VzdGluaiIsImEiOiJjanAzYjF6bWcwNXl4M3Bxd2xzdDFyZ2JlIn0.hjznaFqS-tQOab08WCb5ug',
+        attr='Mapbox attribution')
+
+    folium.Choropleth(
+        geo_data=state_geo,
+        name="choropleth",
+        data=data,
+        columns=["Country", "Our Model"],
+        key_on="feature.properties.name",
+        fill_color="YlGnBu",
+        fill_opacity=0.8,
+        line_opacity=1.0,
+        legend_name="MASE Loss",
+    ).add_to(m)
+
+    folium.LayerControl().add_to(m)
+
+    m.save("map.html")
 
 def loss_by_country():
     """
@@ -147,14 +174,22 @@ def loss_by_country():
         ax.get_yaxis().set_visible(False)
         plt.box(on=None)
 
-        plt.show()
+        # plt.show()
 
         # Save this table to a CSV file
         for i in range(len(cellText)):
             cellText[i].insert(0, countries[i])
         df = pd.DataFrame(cellText)
         df.columns = ["Country"] + columns
-        df.to_csv("reports/" + segment + " Loss By Countries Report - " + datetime.datetime.now().isoformat().split(".")[0] + ".csv")
+        # df.to_csv("reports/" + segment + " Loss By Countries Report - " + datetime.datetime.now().isoformat().split(".")[0] + ".csv")
+
+        df = df.filter(["Country", "Our Model"])
+        df.set_index("Country", inplace=True)
+        df.to_csv("testing.csv")
+        df = pd.read_csv('testing.csv')
+        draw_map(df)
+
+
 
 if __name__ == "__main__":
     loss_by_country()
