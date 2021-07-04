@@ -15,3 +15,8 @@ europe.json
 map.html
 grid_plot.pdf
 tgn-master/*
+chickenpox.py
+collisions.py
+covid.py
+demand.py
+torch_geometric_temporal_example.py

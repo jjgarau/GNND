@@ -1,4 +1,4 @@
-#Integrating LSTMs and GNNs for COVID-19 Forecasting
+# Integrating LSTMs and GNNs for COVID-19 Forecasting
 
 by Nathan Sesti, Juan Jose Garau-Luis
 
@@ -17,6 +17,10 @@ This paper was submitted and accepted to the ICML 2021 Time Series Workshop.
 3) A .json file containing losses and other relevant training data is saved under `results/`.
 4) Use `reports.py` to convert one or more results files into a matplotlib graphic.
 
+## Dependencies
+
+Run `install_torch_geometric.sh` to install PyTorch Geometric. Install other dependencies using `pip`.
+
 ## Datasets
 
 Datasets used in this project include:
@@ -29,4 +33,4 @@ Datasets used in this project include:
 
 ## License
 
-All of this repository's code is made available under the MIT license.
+All of this repository's code is made available under the MIT license. See `LICENSE` file for more detail.
