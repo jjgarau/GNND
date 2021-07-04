@@ -11,3 +11,7 @@ results/*
 collisions.csv
 reports/*
 testing.csv
+europe.json
+map.html
+grid_plot.pdf
+tgn-master/*
