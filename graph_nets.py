@@ -233,7 +233,7 @@ class RecurrentGraphNet(torch.nn.Module):
     def forward(self, data, h=None, c=None):
         x, edge_index, edge_attr = data.x, data.edge_index, data.edge_attr
         for i in range(self.rnn_depth):
-            if self.has_c:
+            if self.has_c:#EDIT LATER v this x should be [:,0] for multivar node features, same with the one below, edge_attr should be edge_attr.reshape(edge_attr.shape[0]*edge_attr.shape[1])[:edge_index.shape[1]]
                 h, c = self.recurrent(x, edge_index, edge_attr.reshape([edge_attr.shape[0]]), h, c)
             else:
                 h = self.recurrent(x, edge_index, edge_attr.reshape([edge_attr.shape[0]]), h)

@@ -386,17 +386,24 @@ class RNN(torch.nn.Module):
         dim: int - number of features of embedding for each node
         module: torch.nn.Module - to be used in the LSTM to calculate each gate
     """
-    def __init__(self, node_features=1, output=1, dim=32, module=GraphLinear, rnn=LSTM, gnn=WeightedSAGEConv, gnn_2=WeightedSAGEConv, rnn_depth=1, name="RNN", edge_count=141):
+    def __init__(self, node_features=1, output=1, dim=32, module=GraphLinear, rnn=LSTM, gnn=WeightedSAGEConv, gnn_2=WeightedSAGEConv, rnn_depth=1, name="RNN", edge_count=423, skip_connection=True):
         super(RNN, self).__init__()
         self.dim = dim
         self.rnn_depth = rnn_depth
         self.name = name
+        self.skip_connection = skip_connection
 
         # Ensure that matrix multiplication sizes match up based on whether GNNs and RNN are used
         if gnn:
-            self.gnn = gnn(node_features, dim)
+            if skip_connection:
+                self.gnn = gnn(node_features, dim)
+            else:
+                self.gnn = gnn(node_features, dim * 2)
             if rnn:
-                self.recurrent = rnn(dim, dim, module=module)
+                if skip_connection:
+                    self.recurrent = rnn(dim, dim, module=module)
+                else:
+                    self.recurrent = rnn(dim * 2, dim * 2, module=module)
             else:
                 self.recurrent = None
         else:
@@ -428,10 +435,13 @@ class RNN(torch.nn.Module):
             x = F.relu(x)
 
         # Initialize hidden and cell states if None
+        current_dim = self.dim
+        if not self.skip_connection:
+            current_dim = self.dim * 2
         if h is None:
-            h = torch.zeros(x.shape[0], self.dim)
+            h = torch.zeros(x.shape[0], current_dim)
         if c is None:
-            c = torch.zeros(x.shape[0], self.dim)
+            c = torch.zeros(x.shape[0], current_dim)
 
         # RNN Layer
         if self.recurrent:
@@ -439,7 +449,10 @@ class RNN(torch.nn.Module):
                 h, c = self.recurrent(x, edge_index, edge_attr, h, c)
 
         # Skip connection from first GNN
-        x = torch.cat((x, h), 1)
+        if self.skip_connection:
+            x = torch.cat((x, h), 1)
+        else:
+            x = h
 
         # Second GNN Layer
         if self.gnn_2:

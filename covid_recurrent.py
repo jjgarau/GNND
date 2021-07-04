@@ -53,32 +53,35 @@ class COVIDDatasetSpaced(InMemoryDataset):
     def process(self):
 
         # Alternative mobility dataset: Facebook Social Connectedness Index
-        # mobility = pd.read_csv('data/covid-data/facebook_mobility.csv')
-        #
-        # def get_mobility_score(country1, country2):
-        #     DEFAULT = 50000
-        #
-        #     def get_country_code(country):
-        #         try:
-        #             return countryinfo.CountryInfo(nation).iso(2)
-        #         except KeyError:
-        #             return None
-        #
-        #     code1 = get_country_code(country1)
-        #     code2 = get_country_code(country2)
-        #     if code1 is None or code2 is None:
-        #         return DEFAULT
-        #
-        #     row = mobility.loc[mobility.user_loc == code1].loc[
-        #         mobility.fr_loc == code2]
-        #     if row.shape[0] == 0:
-        #         return DEFAULT  # The mobility dataset is missing one of the given countries
-        #     else:
-        #         sci = row.iloc[0].scaled_sci
-        #         if isnan(sci):
-        #             return DEFAULT
-        #         else:
-        #             return row.iloc[0].scaled_sci
+        fb_mobility = pd.read_csv('data/covid-data/facebook_mobility.csv')
+
+        def get_sci(country1, country2):
+            DEFAULT = 50000
+
+            def get_country_code(country):
+                try:
+                    return countryinfo.CountryInfo(nation).iso(2)
+                except KeyError:
+                    return None
+
+            code1 = get_country_code(country1)
+            code2 = get_country_code(country2)
+            if code1 is None or code2 is None:
+                print("DEFAULT")
+                return DEFAULT
+
+            row = fb_mobility.loc[fb_mobility.user_loc == code1].loc[
+                fb_mobility.fr_loc == code2]
+            if row.shape[0] == 0:
+                print("DEFAULT")
+                return DEFAULT  # The mobility dataset is missing one of the given countries
+            else:
+                sci = row.iloc[0].scaled_sci
+                if isnan(sci):
+                    print("DEFAULT")
+                    return DEFAULT
+                else:
+                    return row.iloc[0].scaled_sci
 
         # Load mobility dataset
         mobility = pd.read_csv('data/covid-data/mobility_data.csv')
@@ -131,8 +134,16 @@ class COVIDDatasetSpaced(InMemoryDataset):
             edge_attrs += distances[:params.EDGES_PER_NODE]
 
         # Add the mobility feature to the edge weights
-        for i in range(len(source_nodes)):
-            edge_attrs[i] = [edge_attrs[i], get_mobility_score(nations[source_nodes[i]], nations[target_nodes[i]])]
+        if len(params.mobility_edge_features) or True:
+            for i in range(len(source_nodes)):
+                edge_attrs[i] = [edge_attrs[i]]
+                if "sci" in params.mobility_edge_features:
+                    edge_attrs[i].append(get_sci(nations[source_nodes[i]], nations[target_nodes[i]]))
+                if "flights" in params.mobility_edge_features:
+                    edge_attrs[i].append(get_mobility_score(nations[source_nodes[i]], nations[target_nodes[i]]))
+                if "distance" not in params.mobility_edge_features:
+                    edge_attrs[i].pop(0)
+
 
         torch_def = torch.cuda if torch.cuda.is_available() else torch
 
@@ -213,7 +224,9 @@ def train_on_dataset(train_dataset, val_dataset, test_dataset, visualize=True, r
             "Architecture": str(model),
             "Loss by Epoch": [],
             "Reporting Metric by Epoch": [],
-            "Loss by Country": {'train': {}, 'val': {}, 'test': {}}
+            "Loss by Country": {'train': {}, 'val': {}, 'test': {}},
+            "Test Predictions": [],
+            "Test Labels": []
         }
 
         def forward(snapshot, h, c):
@@ -372,16 +385,20 @@ def train_on_dataset(train_dataset, val_dataset, test_dataset, visualize=True, r
                 "Validation": float(val_rm),
                 "Test": float(test_rm)
             })
+            tps = predictions['test']
+            results["Models"][model.name]['Test Predictions'].append([tp.reshape(tp.shape[0]).tolist() for tp in tps])
+            tls = labels['test']
+            results["Models"][model.name]['Test Labels'].append([tl.reshape(tl.shape[0]).tolist() for tl in tls])
             print(
                 'Epoch: {:03d}, Train Loss: {:.5f}, Train Eval Loss: {:.5f}, Val Loss: {:.5f}, Test Loss: {:.5f}'.format(
                     epoch,
                     float(train_cost), train_eval_cost,
                     val_cost,
                     test_cost))
-            # print('Epoch: {:03d}, Train RM: {:.5f}, Train Eval RM: {:.5f}, Val RM: {:.5f}, Test RM: {:.5f}'.format(epoch,
-            #                                                                                           float(train_rm), train_eval_rm,
-            #                                                                                           val_rm,
-            #                                                                                           test_rm))
+            print('Epoch: {:03d}, Train RM: {:.5f}, Train Eval RM: {:.5f}, Val RM: {:.5f}, Test RM: {:.5f}'.format(epoch,
+                                                                                                      float(train_rm), train_eval_rm,
+                                                                                                      val_rm,
+                                                                                                      test_rm))
         # Keep a list of losses from each epoch for every model
         train_losseses.append(train_losses)
         train_eval_losseses.append(train_eval_losses)
@@ -395,13 +412,20 @@ def train_on_dataset(train_dataset, val_dataset, test_dataset, visualize=True, r
 
         best_epoch = val_losses.index(min(val_losses))
         best_losses = [float(train_losses[best_epoch]), train_eval_losses[best_epoch], val_losses[best_epoch], test_losses[best_epoch]]
+        best_rms = [float(train_rms[best_epoch]), float(train_eval_rms[best_epoch]), float(val_rms[best_epoch]),
+                       float(test_rms[best_epoch])]
         print(
             "BEST EPOCH----" + 'Epoch: {:03d}, Train Loss: {:.5f}, Train Eval Loss: {:.5f}, Val Loss: {:.5f}, Test Loss: {:.5f}'.format(
                 best_epoch,
-                float(train_losses[best_epoch]), train_eval_losses[best_epoch],
-                val_losses[best_epoch],
-                test_losses[best_epoch]))
-        results['best_epoch'] = best_losses
+                best_losses[0], best_losses[1],
+                best_losses[2],
+                best_losses[3]))
+        print(
+            "BEST EPOCH----" + 'Epoch: {:03d}, Train RM: {:.5f}, Train Eval RM: {:.5f}, Val RM: {:.5f}, Test RM: {:.5f}'.format(
+                best_epoch,
+                best_rms[0], best_rms[1],
+                best_rms[2],
+                best_rms[3]))
 
         # Calculate and save loss per country to results. Optionally, visualize data
         if visualize:
@@ -415,6 +439,14 @@ def train_on_dataset(train_dataset, val_dataset, test_dataset, visualize=True, r
         results["Models"][model.name]['Loss by Country']['test'] = show_loss_by_country(predictions['test'],
                                                                                         labels['test'], nations,
                                                                                         plot=False)
+
+        results["Models"][model.name]['best_epoch'] = {
+            "Loss": best_losses,
+            "Reporting Metric": best_rms,
+            "Test Predictions": results["Models"][model.name]['Test Predictions'][best_epoch],
+            "Test Labels": results["Models"][model.name]['Test Labels'][best_epoch]
+        }
+
         # show_labels_by_country(labels, nations)
 
     if visualize:
@@ -443,15 +475,14 @@ def train_on_dataset(train_dataset, val_dataset, test_dataset, visualize=True, r
 def gnn_predictor():
     # Load, shuffle, and split dataset
     dataset = COVIDDatasetSpaced(root='data/covid-data/')
-    dataset = dataset.shuffle()
 
     sample = len(dataset)
     sample *= params.sample # Optionally, choose a frame of the dataset to work with
-    train_dataset = dataset[:int(0.8 * sample)]
+    train_dataset = dataset[:int(0.8 * sample)].shuffle()
     val_dataset = dataset[int(0.8 * sample):int(0.9 * sample)]
     test_dataset = dataset[int(0.9 * sample):int(sample)]
 
-    train_on_dataset(train_dataset, val_dataset, test_dataset, visualize=True, record=True)
+    train_on_dataset(train_dataset, val_dataset, test_dataset, visualize=False, record=True)
 
 def cross_validate():
     # Load, shuffle, and split dataset
@@ -490,7 +521,17 @@ if __name__ == '__main__':
 
     df = df[df.location.isin(df2.name_long.values)]
     nations = df.location.unique()
-    nations = np.delete(nations, [len(nations)-1, len(nations)-2]) #Remove World and International
+    remove_me = ['Faeroe Islands', 'Isle of Man', 'Jersey', 'Guernsey', 'Vatican', 'Kosovo', 'Monaco', 'San Marino', 'Liechtenstein', 'Andorra']
+    for n in remove_me:
+        nations = nations[nations != n]
+
+    # Clean the dataset for negative values in the new_cases column - convert them to the average of the surrounding 7 days
+    if 'new_cases' in df:
+        new_cases = df.new_cases.tolist()
+        for i in range(len(new_cases)):
+            if new_cases[i] < 0:
+                new_cases[i] = sum(new_cases[i-3:i+4])/7
+        df.new_cases = new_cases
 
     # Only needed if remaking the dataset
     if not os.path.exists('data/covid-data/processed/covid_dataset_spaced.dataset') or True:
@@ -521,7 +562,7 @@ if __name__ == '__main__':
         df = dfs[0]
 
         print('Dataset preprocessed')
-        # df.to_csv("df.csv")
+        df.to_csv("df.csv")
         print(df.head())
         print(df.columns)
         print(df.shape)

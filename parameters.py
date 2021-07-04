@@ -11,14 +11,14 @@ WSC = WeightedSAGEConv
 USC = lambda in_channels, out_channels, bias=True: WeightedSAGEConv(in_channels, out_channels, weighted=False)
 linear_module = lambda in_channels, out_channels, bias: graph_nets.GraphLinear(in_channels, out_channels, bias=bias)
 DeepUSC = lambda lookback, dim: graph_nets.GNNModule(USC, 3, lookback, dim=dim, res_factors=[1, 0, 1], dropouts=[1])
-DeepWSC = lambda lookback, dim: graph_nets.GNNModule(WSC, 3, lookback, dim=dim, res_factors=None, dropouts=[])
+DeepWSC = lambda lookback, dim: graph_nets.GNNModule(WSC, 3, lookback, dim=dim, res_factors=[1, 0, 1], dropouts=[1])
 
 args = {
   # Number of previous timesteps to use for prediction
   "lookback": 5,
 
   # Pattern of previous timesteps to use for prediction
-  "lookback_pattern": [11, 10, 9, 8, 7],
+  "lookback_pattern": [27, 26, 25, 24, 23, 22, 21, 20, 19, 18, 17, 16, 15, 14, 13, 12, 11, 10, 9, 8, 7],
 
   # Number of edges in the graph - this was a hotfix, needs to be deleted/resolved
   "edge_count": 0,
@@ -42,7 +42,7 @@ args = {
   "reporting_metric": mase1_loss,
 
   # A description to be included in the results output file
-  "experiment_description": "DESCRIPTION NOT FOUND",
+  "experiment_description": "GraphLSTM Ablation FINAL",
 
   # Number of epochs to train models
   "num_epochs": 100,
@@ -56,13 +56,12 @@ args = {
   # Percentage of dataset to use for training (less than 1.0 to speed up training)
   "sample": 1.0,
 
-  # Features to train on
-  "features": ["new_cases",
-                "new_deaths",
+  # Features to train on (of the nodes)
+  "features": ["new_cases_smoothed",
+                # "new_deaths",
                 # "icu_patients",
                 # "tests_per_case",
                 # "stringency_index",
-
                 # "reproduction_rate",
                 # "icu_patients", "hosp_patients", "weekly_icu_admissions",
                 # "weekly_hosp_admissions", "new_tests", "tests_per_case",
@@ -73,17 +72,25 @@ args = {
                 # "female_smokers", "male_smokers", "handwashing_facilities",
                 # "hospital_beds_per_thousand", "life_expectancy", "human_development_index"
                 ],
+
+  # Edge features to train on
+  "mobility_edge_features": [
+                    # "distance",  # geodesic distance between land mass centroids of countries
+                    # "flights",   # number of flights between countries
+                     "sci"  # Facebook Social Connectivity Index
+  ],
+
   "models": []
 }
 
 models = [
-    graph_nets.LagPredictor(),
-    RNN(module=WSC, gnn=WSC, rnn=LSTM, dim=128, gnn_2=WSC, rnn_depth=1, name="Our Model", edge_count=args['edge_count'],
-        node_features=len(args['features'])),
+    RNN(module=WSC, gnn=DeepWSC, rnn=None, dim=16, gnn_2=DeepWSC, rnn_depth=1, name="Our Model", edge_count=args['edge_count'],
+    node_features=len(args['features']), skip_connection=True),
     # graph_nets.RecurrentGraphNet(GConvLSTM),
     # graph_nets.RecurrentGraphNet(GConvGRU),
     # graph_nets.RecurrentGraphNet(DCRNN),
     # graph_nets.RecurrentGraphNet(GCLSTM),
+    # graph_nets.LagPredictor()
     ]
 
 args['models'] = models
@@ -113,6 +120,7 @@ class Parameters:
         self.learning_rate = args['learning_rate']
         self.sample = args['sample']
         self.features = args['features']
+        self.mobility_edge_features = args['mobility_edge_features']
 
         self.loss_func = args['loss_func']
         self.reporting_metric = args['reporting_metric']

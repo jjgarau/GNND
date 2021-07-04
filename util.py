@@ -7,8 +7,11 @@ from torch_geometric_temporal.nn import *
 def mape_loss(output, label):
     return torch.mean(torch.abs(torch.div((output - label), label)))
 
-def mse_loss(output, label):
+def mse_loss(output, label, mean=None):
     return torch.mean(torch.square(output - label))
+
+def msse_loss(output, label, mean=None):
+    return torch.mean(torch.div(torch.square(output - label), label + 1))
 
 def rmse_loss(output, label):
     return torch.sqrt(torch.mean(torch.square(output - label)))
@@ -26,16 +29,16 @@ def mase_loss(output, label, mean=None):
     else:
         return torch.mean(torch.abs(output - label)) / label_mean
 
-
 def mase1_loss(output, label, mean=None):
     # Extreme 1: all countries equal
     # L_i = (x_i - y_i)^2 / y_i
     # L = (L_1 + L_2 + … + L_N) / N
     label = label[:, 0]
+    output = output.reshape(output.shape[0])
     label_mean = torch.mean(label)
     if not mean is None:
         return torch.mean(torch.abs(output - label) / mean)
-    elif label_mean == 0:
+    if label_mean == 0:
         return torch.mean(torch.abs(output - label))
     else:
         return torch.mean(torch.abs(output - label)) / label_mean
@@ -48,12 +51,24 @@ def mase2_loss(output, label, mean=None):
     label = label[:, 0]
     X = torch.sum(output)
     Y = torch.sum(label)
-    if not mean is None:
+    if Y == 0 and not mean is None:
         return torch.abs(X - Y) / torch.sum(mean)
     elif Y == 0:
         return torch.abs(X - Y)
     else:
         return torch.abs(X - Y) / Y
+
+def anti_lag_loss(output, label, lagged_label, mean=None, loss_func=mase2_loss, penalty_factor=0.1):
+    output = output.reshape(output.shape[0])
+    lagged_label = lagged_label.reshape(lagged_label.shape[0])
+
+    # Or instead of penalty factor (or with it) should I be using the same loss function and taking the inverse square of that to ensure good scaling?
+    penalty = torch.mean(torch.div(1, torch.square(output - lagged_label)))
+
+    return loss_func(output, label, mean=mean) + penalty * penalty_factor
+
+def lag_factor(output, lagged_label):
+    return torch.div(torch.abs(output - lagged_label), lagged_label)
 
 def mase3_loss(output, label, populations, mean=None, k=500000):
     # Middle point: consider a population threshold k
@@ -91,7 +106,6 @@ def mase3_loss(output, label, populations, mean=None, k=500000):
     L_i = torch.abs(torch.FloatTensor(large_outputs) - torch.FloatTensor(large_labels)) / torch.FloatTensor(large_means)
     L_k = abs(x_k - y_k) / sum(small_means)
     return L_k + torch.sum(L_i)
-
 
 def inv_reg_mase_loss(output, label):
     return mase_loss(output, label) + torch.mean(torch.div(1, output))
@@ -170,13 +184,13 @@ def show_predictions(predictions, labels):
     plt.show()
 
 def show_loss_by_country(predictions, labels, nations, plot=True):
-    # Plot loss by country over time
-    x = np.arange(0, len(predictions))
-    plt.title('Loss by Country')
-    plt.xlabel("Time (days)")
-    plt.ylabel("MASE Loss")
     losses = {}
-
+    if plot:
+        # Plot loss by country over time
+        x = np.arange(0, len(predictions))
+        plt.title('Loss by Country')
+        plt.xlabel("Time (days)")
+        plt.ylabel("MASE Loss")
     for i in range(len(nations)):
         # Compute MAE loss for each example
         loss = [float(mae_loss(predictions[time][i], labels[time][i])) for time in range(len(predictions))]
