@@ -1,11 +1,15 @@
 import json
 import os
+import matplotlib
 from matplotlib import pyplot as plt
+from matplotlib.gridspec import GridSpec
 from numpy import array as nparray
 import countryinfo
 import pandas as pd
 import datetime
 import folium
+import torch
+import numpy as np
 
 def compare_models():
     """
@@ -78,7 +82,6 @@ def draw_map(data):
         "https://raw.githubusercontent.com/python-visualization/folium/master/examples/data"
     )
     state_geo = 'europe.json'
-    state_unemployment = f"{url}/US_Unemployment_Oct2012.csv"
 
     m = folium.Map(location=[48, -102], zoom_start=3, tiles='https://api.mapbox.com/styles/v1/sestinj/cko1roam616pw18pgzg1kv1yh/tiles/256/{z}/{x}/{y}@2x?access_token=pk.eyJ1Ijoic2VzdGluaiIsImEiOiJjanAzYjF6bWcwNXl4M3Bxd2xzdDFyZ2JlIn0.hjznaFqS-tQOab08WCb5ug',
         attr='Mapbox attribution')
@@ -90,24 +93,24 @@ def draw_map(data):
         columns=["Country", "Our Model"],
         key_on="feature.properties.name",
         fill_color="YlGnBu",
-        fill_opacity=0.8,
+        nan_fill_opacity=1.0,
+        nan_fill_color="#ffffff",
+        fill_opacity=1.0,
         line_opacity=1.0,
-        legend_name="MASE Loss",
+        legend_name="Fraction of Cases Missed",
     ).add_to(m)
 
     folium.LayerControl().add_to(m)
 
     m.save("map.html")
 
+
 def loss_by_country():
     """
     Output a table showing average loss by country for multiple models, along with population and total cases stats
     """
     files = os.listdir('results')
-    files = ['results2021-03-04T16:05:09.json',
-'results2021-03-04T16:10:42.json',
-'results2021-03-04T16:11:19.json',
-'results2021-03-04T16:11:28.json'
+    files = ['results2021-05-21T11:16:52.json',
              ]
     all_losses = {'train': {}, 'val': {}, 'test': {}}
 
@@ -152,7 +155,10 @@ def loss_by_country():
         df = pd.read_csv("df.csv")
         df = dict(df.sum())
         for country in countries:
-            losses["Total Cases"][country] = df[country + "_new_cases"]
+            if country + "_new_cases" in df:
+                losses["Total Cases"][country] = df[country + "_new_cases"]
+            else:
+                losses["Total Cases"][country] = 100000000
 
         # Display in a pyplot table
         cellText = list(map(lambda x: list(x.values()), list(losses.values())))
@@ -190,7 +196,73 @@ def loss_by_country():
         draw_map(df)
 
 
+def generate_testing_results_map():
+    x = np.arange(0, 5)
+    plt.plot(x, x, label="Predictions")
+    plt.plot(x, x, label="Labels")
+    plt.legend()
+    plt.show()
+    quit()
+    """
+    Output a table showing average loss by country for multiple models, along with population and total cases stats
+    """
+    file = 'results2021-05-25T21:43:45.json'
+    model = 'Our Model'
+
+    with open('results/' + file, 'r') as f:
+        data = json.load(f)
+        model_data = data['Models'][model]
+
+        countries = []
+
+        for country in model_data['Loss by Country']['test'].keys():
+            countries.append(country)
+
+        predictions = torch.FloatTensor(model_data['best_epoch']["Test Predictions"])
+        labels = torch.FloatTensor(model_data['best_epoch']["Test Labels"])
+        # 5 day rolling average to avoid zero in the denominator
+        rolling_labels = labels.unfold(dimension=0, size=5, step=1).mean(dim=2)
+        # Because the first two and last two don't have full windows
+        rolling_labels = torch.cat((rolling_labels[:2, :], rolling_labels, rolling_labels[rolling_labels.shape[0] - 2:rolling_labels.shape[0]]), 0)
+        raw_diffs = predictions - labels
+        missed_cases = (raw_diffs < 0).float() * raw_diffs * -1
+        normalized_diffs = torch.div(missed_cases, rolling_labels)
+        sum_diffs = torch.sum(raw_diffs, dim=0)
+        other_mean = sum_diffs/torch.sum(labels, dim=0)
+        mean_normalized_diff = torch.mean(normalized_diffs, dim=0)
+        median_normalized_diff = torch.median(normalized_diffs, dim=0).values
+
+        data = [[countries[i], float(mean_normalized_diff[i])] for i in range(len(countries))]
+        df = pd.DataFrame(data)
+        df.columns = ["Country", "Our Model"]
+        df = df.filter(["Country", "Our Model"])
+        df.set_index("Country", inplace=True)
+        df.to_csv("testing.csv")
+        df = pd.read_csv('testing.csv')
+        draw_map(df)
+
+        fig, ax = plt.subplots(7, 6, sharex='col')
+        fig.tight_layout(pad=1.0)
+        plt.rcParams['font.size'] = '8'
+        plt.rcParams['xtick.labelsize'] = '4'
+        plt.rcParams['ytick.labelsize'] = '4'
+
+        for i in range(7):
+            for j in range(6):
+                if i*6+j >= predictions.shape[1]:
+                    continue
+                x = np.arange(0, 45)
+                ax[i, j].set_title(countries[i*6+j], fontsize=8)
+                ax[i, j].plot(x, predictions[:, i*6+j], label="Predictions")
+                ax[i, j].plot(x, labels[:, i*6+j], label="Labels")
+                for label in (ax[i, j].get_xticklabels() + ax[i, j].get_yticklabels()):
+                    label.set_fontsize(8)
+
+        plt.legend()
+        plt.show()
+        fig.savefig('grid_plot.pdf', bbox_inches='tight')
 
 if __name__ == "__main__":
-    loss_by_country()
+    generate_testing_results_map()
+    # loss_by_country()
     # compare_models()
