@@ -19,7 +19,7 @@ This paper was submitted and accepted to the ICML 2021 Time Series Workshop.
 
 ## Dependencies
 
-Run `install_torch_geometric.sh` to install PyTorch Geometric. Install other dependencies using `pip`.
+Run `install_torch_geometric.sh` to install PyTorch Geometric. Install other dependencies using `pip`. The code uses [PyTorch Geometric](https://github.com/rusty1s/pytorch_geometric) and [PyTorch Geometric Temporal](https://github.com/benedekrozemberczki/pytorch_geometric_temporal) modules.
 
 ## Datasets
 
